@@ -105,7 +105,7 @@ one-second interval.
 
 ## Keys
 
-`q` Quit - `s` Sort - `c` Chart - `a` All/Top - `m` Slim/Full - `p` Pause - `y` Copy - `?` Explain
+`q` Quit - `s` Sort - `c` Chart - `a` All/Top - `m` Slim/Full - `p` Pause - `y` Copy - `g` GPUs - `?` Explain
 
 | Key | Action |
 |---|---|
@@ -115,7 +115,8 @@ one-second interval.
 | `a` | Toggle between the busiest processes and all processes. |
 | `m` | Toggle between slim monitoring and full diagnostics (display only). |
 | `p` | Pause and resume sampling. |
-| `y` | Copy the inspector of the selected process to the clipboard as plain text, with the whole command line (secrets stay redacted). A double click on the inspector does the same. |
+| `y` | Copy the inspector of the selected process to the clipboard as plain text, with the whole command line (secrets stay redacted). A double click on the inspector does the same. Needs `xclip`, `xsel` or `wl-clipboard`; without them the text goes to the terminal as an OSC 52 sequence, which not every terminal accepts. |
+| `g` | Show or hide the integrated GPUs that the live view leaves out by default. Present only when there is such a GPU and no single `--gpu N` was asked. |
 | `?` | Open the explanation of what the numbers mean. Escape, `q` or `?` closes it. |
 
 The arrow keys, PageUp / PageDown, Ctrl+Home / Ctrl+End and the mouse move the table cursor; the selected

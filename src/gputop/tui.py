@@ -20,6 +20,7 @@ from textual.widgets.data_table import CellDoesNotExist
 
 # Local imports
 from gputop import adapters
+from gputop import clipboard
 from gputop import collector
 from gputop import constants
 from gputop import formatting
@@ -125,8 +126,11 @@ HelpScreen {
 }
 """
 
+NO_CLIPBOARD_TOOL_NOTE = "Sent to the terminal only: install xclip, xsel or wl-clipboard"
 # Click.chain of the second click of a double click
 DOUBLE_CLICK = 2
+# View state that survives a switch of the shown GPU set
+CARRIED_KEYS = ("slim", "show_all", "cpu_history", "ram_history")
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +155,7 @@ def format_hidden_note(ordered_adapters: list[dict], gpu_choice: int | str | Non
     if not names:
         return ""
     noun = "GPU" if len(names) == 1 else "GPUs"
-    return (
-        f"{len(names)} integrated {noun} hidden: {', '.join(names)} - "
-        f"run with --gpu {constants.GPU_ALL}"
-    )
+    return f"{len(names)} integrated {noun} hidden: {', '.join(names)} - press g to show"
 
 
 def find_shown_adapter(ordered_adapters: list[dict], index: int) -> dict | None:
@@ -175,8 +176,9 @@ def create_view_state(
 
     Keys: ordered_adapters (list of adapter, the enumeration of this run), shown_indexes
     (list of int, fixed), hidden_note (str, the line about GPUs left out, "" for none),
-    multi_gpu (bool, several GPUs are shown), interval (float, seconds
-    between refreshes), show_system (bool), blocks (list of GPU block, one per shown GPU, see
+    can_switch_gpus (bool, g has two GPU sets to switch between), switch_gpus (bool, the
+    app was left to reopen with the other GPU set), multi_gpu (bool, several GPUs are
+    shown), interval (float, seconds between refreshes), show_system (bool), blocks (list of GPU block, one per shown GPU, see
     tui_panels.create_gpu_block), columns (list of column, fixed), sort_modes (list of str,
     fixed), sort_index (int), show_all (bool, False = Top filter), chart_mode (int, -1 = all
     charts), slim (bool), paused (bool, read by the worker), system_sample (system sample or
@@ -197,6 +199,8 @@ def create_view_state(
         "ordered_adapters": ordered_adapters,
         "shown_indexes": shown_indexes,
         "hidden_note": hidden_note,
+        "can_switch_gpus": False,
+        "switch_gpus": False,
         "multi_gpu": multi_gpu,
         "interval": interval,
         "show_system": show_system,
@@ -490,15 +494,23 @@ def render_inspector_panel(app) -> None:
 
 
 def copy_inspector(app) -> None:
-    """Copy the inspector of the selected row to the clipboard as plain text."""
+    """Copy the inspector of the selected row to the clipboard as plain text.
+
+    The desktop's clipboard tool is the reliable path; the terminal escape sequence is sent
+    as well because it is the only one that reaches the user's machine over SSH.
+    """
     view_state = app.view_state
     row, snapshot = view_state["row_index"].get(view_state["selected_key"], (None, None))
     if row is None:
         return
     title = tui_inspector.format_inspector_title(row, view_state["multi_gpu"])
     text = tui_inspector.format_inspector_text(title, row, snapshot, app.size.width)
+    used_tool = clipboard.copy_text(text)
     app.copy_to_clipboard(text)
-    app.notify(f"Copied: {title}", timeout=2)
+    if used_tool:
+        app.notify(f"Copied: {title}", timeout=2)
+    else:
+        app.notify(NO_CLIPBOARD_TOOL_NOTE, severity="warning", timeout=6)
 
 
 def render_all(app) -> None:
@@ -582,6 +594,12 @@ def toggle_slim(app) -> None:
     """Switch between slim monitoring and full diagnostics."""
     app.view_state["slim"] = not app.view_state["slim"]
     render_dashboard(app)
+
+
+def switch_gpus(app) -> None:
+    """Leave the app so run_tui reopens it with the other GPU set."""
+    app.view_state["switch_gpus"] = True
+    quit_app(app)
 
 
 def toggle_pause(app) -> None:
@@ -668,6 +686,7 @@ class GpuTopApp(App):
         Binding("m", "toggle_slim", "Slim/Full"),
         Binding("p", "toggle_pause", "Pause"),
         Binding("y", "copy_inspector", "Copy"),
+        Binding("g", "switch_gpus", "GPUs"),
         Binding("question_mark", "show_help", "Explain", key_display="?"),
     ]
 
@@ -745,21 +764,54 @@ class GpuTopApp(App):
     def action_copy_inspector(self) -> None:
         copy_inspector(self)
 
+    def action_switch_gpus(self) -> None:
+        switch_gpus(self)
+
+    def check_action(self, action: str, parameters: tuple) -> bool:
+        if action == "switch_gpus":
+            return self.view_state["can_switch_gpus"]
+        return True
+
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
 
 
+def get_other_choice(gpu_choice: int | str | None) -> int | str | None:
+    """The GPU set g switches to: every adapter from the default set, and back."""
+    if gpu_choice is None:
+        return constants.GPU_ALL
+    return None
+
+
+def can_switch_gpus(ordered_adapters: list[dict], gpu_choice: int | str | None) -> bool:
+    """True when g changes the view: no single GPU was asked and one is hidden by default."""
+    if gpu_choice not in (None, constants.GPU_ALL):
+        return False
+    return len(adapters.list_default_indexes(ordered_adapters)) < len(ordered_adapters)
+
+
 def run_tui(gpu_choice: int | str | None, interval: float, show_system: bool) -> int:
-    """Run the TUI for the asked GPU, for all of them, or for the default set."""
+    """Run the TUI for the asked GPU, for all of them, or for the default set.
+
+    The shown GPU set is fixed for the life of one app, so g ends the app and this loop
+    opens the next one with the other set; the view switches and the histories carry over.
+    """
     ordered_adapters = adapters.list_ordered_adapters()
-    shown_indexes = select_shown_indexes(ordered_adapters, gpu_choice)
-    hidden_note = format_hidden_note(ordered_adapters, gpu_choice)
-    view_state = create_view_state(
-        ordered_adapters, shown_indexes, interval, show_system, hidden_note
-    )
-    app = GpuTopApp(view_state)
-    app.run()
-    return app.return_code or 0
+    carried = {}
+    while True:
+        shown_indexes = select_shown_indexes(ordered_adapters, gpu_choice)
+        hidden_note = format_hidden_note(ordered_adapters, gpu_choice)
+        view_state = create_view_state(
+            ordered_adapters, shown_indexes, interval, show_system, hidden_note
+        )
+        view_state["can_switch_gpus"] = can_switch_gpus(ordered_adapters, gpu_choice)
+        view_state.update(carried)
+        app = GpuTopApp(view_state)
+        app.run()
+        if not view_state["switch_gpus"]:
+            return app.return_code or 0
+        gpu_choice = get_other_choice(gpu_choice)
+        carried = {key: view_state[key] for key in CARRIED_KEYS}
 
 
 def main():

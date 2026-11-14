@@ -90,12 +90,12 @@ gputop with `--no-system` to hide them.
 ## Hidden GPUs
 
 An integrated GPU is left out when the machine also has a discrete one, and one line under the
-GPU panels names it. Its processes are then not in the table. Start gputop with `--gpu all`
-to show every GPU.
+GPU panels names it. Its processes are then not in the table. Press `g` to show every GPU and
+`g` again to hide it, or start gputop with `--gpu all`.
 
 ## Keys
 
-`q` quit - `s` sort - `c` chart - `a` all/top - `m` slim/full - `p` pause - `y` copy -
+`q` quit - `s` sort - `c` chart - `a` all/top - `m` slim/full - `p` pause - `y` copy - `g` GPUs -
 `?` this page -
 arrows, PageUp and PageDown move the selection
 
