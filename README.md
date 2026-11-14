@@ -224,3 +224,7 @@ editable mode together with its dependencies:
 ```bash
 uv pip install -e .
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
