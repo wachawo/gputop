@@ -534,23 +534,36 @@ def get_thread_style(load: float) -> str:
     return SYSTEM_CPU_STYLE
 
 
-def render_thread_line(sample: dict) -> Text:
+def get_spark_width(room: int) -> int:
+    """Samples one CPU or RAM sparkline draws in the room the panel has."""
+    return max(8, min(30, (room - 14) // 2))
+
+
+def append_graph_caption(line: Text, graph_cells: int, column: int, caption: str) -> None:
+    """Pad a graph to the shared column width and add its caption, so captions line up."""
+    line.append(" " * max(0, column - graph_cells))
+    line.append(f"  {caption}", style=SYSTEM_CAPTION_STYLE)
+
+
+def render_thread_line(sample: dict, column: int) -> Text:
     """One glyph per logical CPU, coloured by load."""
     line = Text(LEGEND_INDENT)
     for load in sample["per_core"]:
         line.append(tui_draw.get_spark_glyph(load), style=get_thread_style(load))
-    line.append("  per-thread", style=SYSTEM_CAPTION_STYLE)
+    append_graph_caption(line, len(sample["per_core"]), column, "per-thread")
     return line
 
 
-def render_system_history_line(cpu_history, ram_history, room: int) -> Text:
-    """CPU and RAM sparklines of the recent samples."""
-    spark_width = max(8, min(30, (room - 10) // 2))
+def render_system_history_line(cpu_history, ram_history, spark_width: int, column: int) -> Text:
+    """CPU and RAM sparklines of the recent samples, each in a column of the shared width."""
     line = Text(LEGEND_INDENT)
-    line.append_text(tui_draw.draw_sparkline(cpu_history, spark_width, 100.0, SYSTEM_CPU_STYLE))
-    line.append(" CPU   ", style=SYSTEM_CAPTION_STYLE)
-    line.append_text(tui_draw.draw_sparkline(ram_history, spark_width, 100.0, SYSTEM_RAM_STYLE))
-    line.append(" RAM", style=SYSTEM_CAPTION_STYLE)
+    cpu_spark = tui_draw.draw_sparkline(cpu_history, spark_width, 100.0, SYSTEM_CPU_STYLE)
+    line.append_text(cpu_spark)
+    append_graph_caption(line, cpu_spark.cell_len, column, "CPU")
+    line.append("   ")
+    ram_spark = tui_draw.draw_sparkline(ram_history, spark_width, 100.0, SYSTEM_RAM_STYLE)
+    line.append_text(ram_spark)
+    append_graph_caption(line, ram_spark.cell_len, spark_width, "RAM")
     return line
 
 
@@ -595,8 +608,10 @@ def render_system_panel(
     room = width - SYSTEM_WIDTH_MARGIN
     lines = render_system_bars(sample, room, slim)
     if not slim:
-        lines.append(render_thread_line(sample))
-        lines.append(render_system_history_line(cpu_history, ram_history, room))
+        spark_width = get_spark_width(room)
+        column = max(spark_width, len(sample["per_core"]))
+        lines.append(render_thread_line(sample, column))
+        lines.append(render_system_history_line(cpu_history, ram_history, spark_width, column))
         lines.append(render_top_ram_line(sample))
         lines.append(render_top_cpu_line(sample))
     panel = Text("\n").join(lines)

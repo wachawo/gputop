@@ -13,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Markdown, Select, Static
 from textual.widgets.data_table import CellDoesNotExist
@@ -123,6 +124,9 @@ HelpScreen {
     padding: 1 2;
 }
 """
+
+# Click.chain of the second click of a double click
+DOUBLE_CLICK = 2
 
 logger = logging.getLogger(__name__)
 
@@ -485,6 +489,18 @@ def render_inspector_panel(app) -> None:
     inspector_widget.update(tui_inspector.render_inspector(row, snapshot, app.size.width))
 
 
+def copy_inspector(app) -> None:
+    """Copy the inspector of the selected row to the clipboard as plain text."""
+    view_state = app.view_state
+    row, snapshot = view_state["row_index"].get(view_state["selected_key"], (None, None))
+    if row is None:
+        return
+    title = tui_inspector.format_inspector_title(row, view_state["multi_gpu"])
+    text = tui_inspector.format_inspector_text(title, row, snapshot, app.size.width)
+    app.copy_to_clipboard(text)
+    app.notify(f"Copied: {title}", timeout=2)
+
+
 def render_all(app) -> None:
     """Redraw everything from the stored state: dashboard, table, inspector."""
     render_dashboard(app)
@@ -651,6 +667,7 @@ class GpuTopApp(App):
         Binding("a", "toggle_filter", "All/Top"),
         Binding("m", "toggle_slim", "Slim/Full"),
         Binding("p", "toggle_pause", "Pause"),
+        Binding("y", "copy_inspector", "Copy"),
         Binding("question_mark", "show_help", "Explain", key_display="?"),
     ]
 
@@ -702,6 +719,11 @@ class GpuTopApp(App):
     def on_select_changed(self, event: Select.Changed) -> None:
         handle_chart_changed(self, event.value)
 
+    def on_click(self, event: Click) -> None:
+        is_inspector = event.widget is not None and event.widget.id == "inspector"
+        if is_inspector and event.chain == DOUBLE_CLICK:
+            copy_inspector(self)
+
     def action_quit_app(self) -> None:
         quit_app(self)
 
@@ -719,6 +741,9 @@ class GpuTopApp(App):
 
     def action_toggle_pause(self) -> None:
         toggle_pause(self)
+
+    def action_copy_inspector(self) -> None:
+        copy_inspector(self)
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())

@@ -8,6 +8,12 @@ memory of a process into weights, KV cache, compute buffers and runtime overhead
 full-screen live view, prints a single text or JSON snapshot, records snapshots to a file, and
 compares two snapshots.
 
+![gputop live view: device panel, system panel, charts, process table and inspector](docs/screenshots/live.png)
+
+With `--gpu all` the live view also shows the integrated GPU:
+
+![gputop live view with two GPUs](docs/screenshots/all-gpus.png)
+
 ## Requirements
 
 - Linux. Other platforms are not supported.
@@ -99,7 +105,7 @@ one-second interval.
 
 ## Keys
 
-`q` Quit - `s` Sort - `c` Chart - `a` All/Top - `m` Slim/Full - `p` Pause - `?` Explain
+`q` Quit - `s` Sort - `c` Chart - `a` All/Top - `m` Slim/Full - `p` Pause - `y` Copy - `?` Explain
 
 | Key | Action |
 |---|---|
@@ -109,6 +115,7 @@ one-second interval.
 | `a` | Toggle between the busiest processes and all processes. |
 | `m` | Toggle between slim monitoring and full diagnostics (display only). |
 | `p` | Pause and resume sampling. |
+| `y` | Copy the inspector of the selected process to the clipboard as plain text, with the whole command line (secrets stay redacted). A double click on the inspector does the same. |
 | `?` | Open the explanation of what the numbers mean. Escape, `q` or `?` closes it. |
 
 The arrow keys, PageUp / PageDown, Ctrl+Home / Ctrl+End and the mouse move the table cursor; the selected

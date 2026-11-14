@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """Inspector panel renderer of the gputop TUI: what one process keeps in GPU memory."""
 
+import io
 import os
 
-from rich.console import Group
+from rich.console import Console, Group
 from rich.table import Table
 from rich.text import Text
 
@@ -22,6 +23,8 @@ BAR_WIDTH_MIN = 20
 BAR_WIDTH_MAX = 100
 MAX_PORTS = 8
 MAX_CMDLINE_CHARS = 400
+# Console width of the copied text: wide enough that no line of it is wrapped or cut
+COPY_WIDTH = 100000
 MAX_SERVER_MODELS = 4
 ENGINE_MIN_PCT = 0.5
 
@@ -324,22 +327,29 @@ def render_plain_body(row: dict) -> list:
     return body
 
 
-def render_tail(detail: dict) -> list:
-    """Common tail: listening ports, then the redacted command line or the protected note."""
+def render_tail(detail: dict, full_cmdline: bool) -> list:
+    """Common tail: listening ports, then the redacted command line or the protected note.
+
+    The command line is cut to MAX_CMDLINE_CHARS for the panel and whole for a copy.
+    """
     tail = []
     if detail["ports"]:
         ports = ", ".join(str(port) for port in detail["ports"][:MAX_PORTS])
         tail.append(Text(f"listening: {ports}", style=PORT_STYLE))
     if detail["cmdline"]:
         redacted = cmdline.redact_cmdline(detail["cmdline"])
-        joined = " ".join(redacted)[:MAX_CMDLINE_CHARS]
+        joined = " ".join(redacted)
+        if not full_cmdline:
+            joined = joined[:MAX_CMDLINE_CHARS]
         tail.append(Text(joined, style=CMDLINE_STYLE, overflow="ellipsis", no_wrap=True))
     elif detail["access_denied"]:
         tail.append(Text(PROTECTED_NOTE, style=CMDLINE_STYLE))
     return tail
 
 
-def render_inspector(row: dict | None, snapshot: dict | None, width: int) -> Text | Group:
+def render_inspector(
+    row: dict | None, snapshot: dict | None, width: int, full_cmdline: bool = False
+) -> Text | Group:
     """The inspector body for the selected row, or the hint when nothing is selected."""
     if row is None or snapshot is None:
         return Text(EMPTY_HINT, style=constants.MUTED_STYLE)
@@ -350,8 +360,17 @@ def render_inspector(row: dict | None, snapshot: dict | None, width: int) -> Tex
         parts.extend(render_llm_body(row, width))
     else:
         parts.extend(render_plain_body(row))
-    parts.extend(render_tail(row["detail"]))
+    parts.extend(render_tail(row["detail"], full_cmdline))
     return Group(*parts)
+
+
+def format_inspector_text(title: str, row: dict, snapshot: dict, width: int) -> str:
+    """The inspector of one row as plain text for the clipboard, with the whole command line."""
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=COPY_WIDTH, color_system=None)
+    console.print(render_inspector(row, snapshot, width, full_cmdline=True))
+    lines = [title] + [line.rstrip() for line in buffer.getvalue().splitlines()]
+    return "\n".join(lines) + "\n"
 
 
 def main():

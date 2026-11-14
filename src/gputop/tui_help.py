@@ -95,7 +95,8 @@ to show every GPU.
 
 ## Keys
 
-`q` quit - `s` sort - `c` chart - `a` all/top - `m` slim/full - `p` pause - `?` this page -
+`q` quit - `s` sort - `c` chart - `a` all/top - `m` slim/full - `p` pause - `y` copy -
+`?` this page -
 arrows, PageUp and PageDown move the selection
 
 ## Charts
