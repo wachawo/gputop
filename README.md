@@ -35,13 +35,8 @@ Inside the project directory this is the same:
 uv run gputop
 ```
 
-Without `uv` and without installing the package, `main.py` runs gputop straight from the
-checkout with any Python 3.11+ that has the dependencies (`textual`, `psutil`,
-`nvidia-ml-py`):
-
-```bash
-python3 main.py
-```
+`main.py` runs gputop straight from the checkout without installing the package; see
+[Development](#development).
 
 A wide terminal (about 140 columns or more) is recommended for the full process table.
 
@@ -182,4 +177,42 @@ gputop never writes diagnostics to the terminal. To get a log, set the environme
 
 ```bash
 GPUTOP_LOG_FILE=/tmp/gputop.log ./gputop
+```
+
+## Development
+
+All commands run from the repository directory.
+
+Create the project environment. `uv sync` installs the dependencies pinned in `uv.lock`
+(`textual`, `psutil`, `nvidia-ml-py`) into `.venv`:
+
+```bash
+uv sync
+```
+
+Run from the activated environment:
+
+```bash
+source .venv/bin/activate
+```
+
+```bash
+./main.py
+```
+
+Or run without activating it:
+
+```bash
+uv run ./main.py
+```
+
+`main.py` uses the Python that starts it, and the dependencies have to be installed in that
+Python. Started with the system Python instead of the project environment it fails with
+`ModuleNotFoundError: No module named 'textual'`.
+
+To use gputop from another environment that is already activated, install it there in
+editable mode together with its dependencies:
+
+```bash
+uv pip install -e .
 ```
