@@ -269,6 +269,7 @@ def build_card_adapter(card: dict) -> dict:
         card["vendor_id"],
         card["vram_total"],
         card["gtt_total"],
+        card["integrated"],
     )
 
 

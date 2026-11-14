@@ -48,15 +48,16 @@ A wide terminal (about 140 columns or more) is recommended for the full process 
 ## Command line
 
 ```
-gputop [--once] [--json] [--gpu N] [--list-gpus] [--no-system] [-i SECONDS]
+gputop [--once] [--json] [--gpu N|all] [--list-gpus] [--no-system] [-i SECONDS]
 ```
 
 | Option | Meaning |
 |---|---|
 | `--once` | Print one text snapshot and exit, without the live view. |
 | `--json` | Print one JSON snapshot and exit (implies `--once`). |
-| `--gpu N` | Show only this GPU. The live view shows all GPUs by default; one-shot output defaults to GPU 0. |
-| `--list-gpus` | List the selectable GPU adapters with their index, vendor and key, and exit. |
+| `--gpu N` | Show only this GPU. One-shot output defaults to GPU 0. |
+| `--gpu all` | Live view only: show every GPU. By default the live view leaves out an integrated GPU when a discrete one is present and names it in one line under the GPU panels. |
+| `--list-gpus` | List the selectable GPU adapters with their index, vendor and key, and exit. Adapters the live view hides by default are marked. |
 | `--no-system` | Do not sample system RAM and CPU: no system panel and no RAM / CPU% columns in the live view, no system section in `--once` / `--json`. |
 | `-i`, `--interval SECONDS` | Refresh interval of the live view in seconds (default 1). |
 | `-h`, `--help` | Show the help text. |

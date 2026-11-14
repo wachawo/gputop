@@ -87,6 +87,12 @@ would not say. `…` means the process needs one more sample before it can be ra
 figures are system memory and CPU, never GPU memory, and they are in no GPU total. Start
 gputop with `--no-system` to hide them.
 
+## Hidden GPUs
+
+An integrated GPU is left out when the machine also has a discrete one, and one line under the
+GPU panels names it. Its processes are then not in the table. Start gputop with `--gpu all`
+to show every GPU.
+
 ## Keys
 
 `q` quit - `s` sort - `c` chart - `a` all/top - `m` slim/full - `p` pause - `?` this page -

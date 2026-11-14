@@ -30,6 +30,8 @@ DRM_DRIVERS = (DRIVER_AMDGPU, DRIVER_I915, DRIVER_XE)
 # Command line messages
 LINUX_ONLY_MESSAGE = "gputop supports Linux only (NVIDIA through NVML, AMD and Intel through DRM)."
 GPU_INDEX_MESSAGE = "--gpu must be a non-negative index"
+# Value of --gpu that shows every adapter in the live view, integrated ones included
+GPU_ALL = "all"
 INTERVAL_MESSAGE = "--interval must be a finite number greater than zero"
 
 # Per-process counter names (members of proc_gpu["available"])

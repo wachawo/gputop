@@ -60,10 +60,25 @@ def select_adapter(ordered: list[dict], gpu_index: int) -> dict | None:
     )
 
 
-def format_adapter_line(index: int, adapter: dict) -> str:
+def list_default_indexes(ordered: list[dict]) -> list[int]:
+    """Indexes the live view shows without --gpu: the discrete adapters, else every adapter.
+
+    An integrated GPU next to a discrete one is left out: without root it has almost nothing
+    to report. A machine with integrated GPUs only shows them all; no adapters gives [0].
+    """
+    if not ordered:
+        return [0]
+    discrete = [index for index, adapter in enumerate(ordered) if not adapter["integrated"]]
+    return discrete or list(range(len(ordered)))
+
+
+def format_adapter_line(index: int, adapter: dict, is_hidden: bool) -> str:
     """Return one line of the --list-gpus output."""
     vendor = records.get_vendor_name(adapter["vendor_id"])
-    return f"{index}: {adapter['name']} ({vendor}, key 0x{adapter['key']:016x})"
+    line = f"{index}: {adapter['name']} ({vendor}, key 0x{adapter['key']:016x})"
+    if is_hidden:
+        line += f" - integrated, hidden in the live view without --gpu {constants.GPU_ALL}"
+    return line
 
 
 def main():

@@ -312,8 +312,9 @@ def open_nvidia(adapter: dict | None, gpu_index: int, shared: dict | None = None
     """Open the NVML state for one adapter (None: the device with NVML index gpu_index).
 
     `shared` is the create_shared_reads record of the program when several collectors are
-    open at once; None gives this state its own. Never raises. Without the binding the state stays inert for good; when the library does
-    not initialise, the state has no session and the refresh keeps retrying.
+    open at once; None gives this state its own. Never raises. Without the binding the
+    state stays inert for good; when the library does not initialise, the state has no
+    session and the refresh keeps retrying.
     """
     state = create_nvidia_state(adapter, gpu_index, shared)
     if pynvml is None:
@@ -404,7 +405,8 @@ def apply_utilisation(
             "time": now, "sm": sample.smUtil, "enc": sample.encUtil, "dec": sample.decUtil
         }
     if newest:
-        state["cursors"][entry["key"]] = max(int(sample.timeStamp) for sample in newest.values())
+        timestamps = [int(sample.timeStamp) for sample in newest.values()]
+        state["cursors"][entry["key"]] = max(timestamps)
     for pid in list(loads):
         gpu = device_procs["procs"].get(pid)
         load = loads[pid]

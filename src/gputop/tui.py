@@ -86,6 +86,13 @@ Screen {
     height: auto;
     color: $text-muted;
 }
+#hidden-note {
+    height: 1;
+    padding: 0 2;
+    color: $text-muted;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
 #procs {
     height: 1fr;
     min-height: 4;
@@ -120,13 +127,30 @@ HelpScreen {
 logger = logging.getLogger(__name__)
 
 
-def select_shown_indexes(ordered_adapters: list[dict], gpu_index: int | None) -> list[int]:
-    """The shown GPU set: the asked index, else every adapter, else index 0 alone."""
-    if gpu_index is not None:
-        return [gpu_index]
-    if not ordered_adapters:
-        return [0]
-    return list(range(len(ordered_adapters)))
+def select_shown_indexes(ordered_adapters: list[dict], gpu_choice: int | str | None) -> list[int]:
+    """The shown GPU set: the asked index, every adapter for "all", else the default set."""
+    if gpu_choice == constants.GPU_ALL:
+        return list(range(len(ordered_adapters))) or [0]
+    if gpu_choice is not None:
+        return [gpu_choice]
+    return adapters.list_default_indexes(ordered_adapters)
+
+
+def format_hidden_note(ordered_adapters: list[dict], gpu_choice: int | str | None) -> str:
+    """One line naming the integrated GPUs the default set left out; "" when none were."""
+    if gpu_choice is not None:
+        return ""
+    shown = adapters.list_default_indexes(ordered_adapters)
+    names = [
+        adapter["name"] for index, adapter in enumerate(ordered_adapters) if index not in shown
+    ]
+    if not names:
+        return ""
+    noun = "GPU" if len(names) == 1 else "GPUs"
+    return (
+        f"{len(names)} integrated {noun} hidden: {', '.join(names)} - "
+        f"run with --gpu {constants.GPU_ALL}"
+    )
 
 
 def find_shown_adapter(ordered_adapters: list[dict], index: int) -> dict | None:
@@ -137,12 +161,17 @@ def find_shown_adapter(ordered_adapters: list[dict], index: int) -> dict | None:
 
 
 def create_view_state(
-    ordered_adapters: list[dict], shown_indexes: list[int], interval: float, show_system: bool
+    ordered_adapters: list[dict],
+    shown_indexes: list[int],
+    interval: float,
+    show_system: bool,
+    hidden_note: str = "",
 ) -> dict:
     """Create the UI state of one run.
 
     Keys: ordered_adapters (list of adapter, the enumeration of this run), shown_indexes
-    (list of int, fixed), multi_gpu (bool, several GPUs are shown), interval (float, seconds
+    (list of int, fixed), hidden_note (str, the line about GPUs left out, "" for none),
+    multi_gpu (bool, several GPUs are shown), interval (float, seconds
     between refreshes), show_system (bool), blocks (list of GPU block, one per shown GPU, see
     tui_panels.create_gpu_block), columns (list of column, fixed), sort_modes (list of str,
     fixed), sort_index (int), show_all (bool, False = Top filter), chart_mode (int, -1 = all
@@ -163,6 +192,7 @@ def create_view_state(
     return {
         "ordered_adapters": ordered_adapters,
         "shown_indexes": shown_indexes,
+        "hidden_note": hidden_note,
         "multi_gpu": multi_gpu,
         "interval": interval,
         "show_system": show_system,
@@ -631,6 +661,8 @@ class GpuTopApp(App):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="dashboard"):
             yield Static(tui_panels.DEVICE_PLACEHOLDER, id="device")
+            if self.view_state["hidden_note"]:
+                yield Static(self.view_state["hidden_note"], id="hidden-note")
             if self.view_state["show_system"]:
                 yield Static(tui_panels.SYSTEM_PLACEHOLDER, id="system")
             with Vertical(id="history"):
@@ -692,11 +724,14 @@ class GpuTopApp(App):
         self.push_screen(HelpScreen())
 
 
-def run_tui(gpu_index: int | None, interval: float, show_system: bool) -> int:
-    """Run the TUI for the asked GPU, or for every GPU; returns the exit status."""
+def run_tui(gpu_choice: int | str | None, interval: float, show_system: bool) -> int:
+    """Run the TUI for the asked GPU, for all of them, or for the default set."""
     ordered_adapters = adapters.list_ordered_adapters()
-    shown_indexes = select_shown_indexes(ordered_adapters, gpu_index)
-    view_state = create_view_state(ordered_adapters, shown_indexes, interval, show_system)
+    shown_indexes = select_shown_indexes(ordered_adapters, gpu_choice)
+    hidden_note = format_hidden_note(ordered_adapters, gpu_choice)
+    view_state = create_view_state(
+        ordered_adapters, shown_indexes, interval, show_system, hidden_note
+    )
     app = GpuTopApp(view_state)
     app.run()
     return app.return_code or 0

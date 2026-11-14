@@ -66,6 +66,16 @@ def configure_logging() -> None:
     logging.basicConfig(**LOGGING)
 
 
+def parse_gpu_choice(text: str) -> int | str:
+    """The --gpu value: an index, or the word that asks the live view for every adapter."""
+    if text == constants.GPU_ALL:
+        return constants.GPU_ALL
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an index or '{constants.GPU_ALL}'") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argument parser of the main command."""
     parser = argparse.ArgumentParser(prog=PROG, description=DESCRIPTION, epilog=EPILOG)
@@ -77,8 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="print one JSON snapshot and exit (implies --once)",
     )
     parser.add_argument(
-        "--gpu", metavar="N", type=int, default=None,
-        help="show only this GPU (TUI default: all; one-shot default: 0)",
+        "--gpu", metavar="N|all", type=parse_gpu_choice, default=None,
+        help="show only this GPU, or all of them in the live view (live default: "
+             "discrete GPUs; one-shot default: 0)",
     )
     parser.add_argument(
         "--list-gpus", action="store_true", help="list selectable GPU adapters and exit"
@@ -96,8 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def check_options(parser: argparse.ArgumentParser, options: argparse.Namespace) -> None:
-    """The two early value checks; each failure leaves through the parser's usage error."""
-    if options.gpu is not None and options.gpu < 0:
+    """The early value checks; each failure leaves through the parser's usage error."""
+    is_all = options.gpu == constants.GPU_ALL
+    if is_all and (options.once or options.json):
+        parser.error(
+            f"--gpu {constants.GPU_ALL} is for the live view; --once and --json take an index"
+        )
+    if options.gpu is not None and not is_all and options.gpu < 0:
         parser.error(constants.GPU_INDEX_MESSAGE)
     if not math.isfinite(options.interval) or options.interval <= 0:
         parser.error(constants.INTERVAL_MESSAGE)
@@ -143,8 +159,9 @@ def write_adapter_list() -> int:
     """Print one line per adapter of the ordered list."""
     ordered_adapters = adapters.list_ordered_adapters()
     lines = []
+    shown = adapters.list_default_indexes(ordered_adapters)
     for index, adapter in enumerate(ordered_adapters):
-        lines.append(adapters.format_adapter_line(index, adapter) + "\n")
+        lines.append(adapters.format_adapter_line(index, adapter, index not in shown) + "\n")
     return write_stdout("".join(lines))
 
 
@@ -224,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         return write_adapter_list()
     if options.once or options.json:
         return run_snapshot_mode(parser, options)
-    record.check_gpu_range(parser, options.gpu)
+    if options.gpu != constants.GPU_ALL:
+        record.check_gpu_range(parser, options.gpu)
     return start_tui(options)
 
 

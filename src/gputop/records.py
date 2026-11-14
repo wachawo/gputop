@@ -26,6 +26,7 @@ def create_adapter(
     vendor_id: int,
     dedicated_vram: int = 0,
     shared_system: int = 0,
+    integrated: bool = False,
 ) -> dict:
     """Create an adapter record: one physical GPU, immutable after enumeration.
 
@@ -34,6 +35,7 @@ def create_adapter(
     vendor_id: int, PCI vendor id.
     dedicated_vram: int, total device memory in bytes; 0 means unknown.
     shared_system: int, total GPU-accessible system RAM in bytes (AMD GTT); 0 otherwise.
+    integrated: bool, the GPU has no memory of its own (as known at enumeration).
     """
     return {
         "key": key,
@@ -41,6 +43,7 @@ def create_adapter(
         "vendor_id": vendor_id,
         "dedicated_vram": dedicated_vram,
         "shared_system": shared_system,
+        "integrated": integrated,
     }
 
 
