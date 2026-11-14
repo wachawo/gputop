@@ -40,16 +40,9 @@ LLM_MODEL_KEYS = (
 )
 
 
-def copy_value(value):
-    """Return a list copy for lists so the document shares nothing with the snapshot."""
-    if isinstance(value, list):
-        return list(value)
-    return value
-
-
 def pick_keys(source: dict, keys: tuple) -> dict:
-    """Copy the named keys of a record, in the given order; a missing key reads as None."""
-    return {key: copy_value(source.get(key)) for key in keys}
+    """The named keys of a record, in the given order."""
+    return {key: source[key] for key in keys}
 
 
 def round_or_none(value, digits: int):
@@ -81,7 +74,7 @@ def build_system_dict(sample: dict) -> dict:
         "source": SYSTEM_SOURCE,
         "cpu": {
             "pct": round(sample["cpu_pct"], 1),
-            "per_core": list(sample["per_core"]),
+            "per_core": sample["per_core"],
             "logical": sample["logical"],
             "physical": sample["physical"],
         },
@@ -111,7 +104,7 @@ def build_server_dict(server: dict | None) -> dict | None:
 
 def build_llm_model_dict(model: dict) -> dict:
     """One parsed model of an exported LLM view."""
-    return {target: copy_value(model.get(source)) for target, source in LLM_MODEL_KEYS}
+    return {target: model[source] for target, source in LLM_MODEL_KEYS}
 
 
 def build_llm_dict(view: dict) -> dict:
@@ -121,11 +114,11 @@ def build_llm_dict(view: dict) -> dict:
         "segments": [pick_keys(segment, SEGMENT_KEYS) for segment in view["segments"]],
         "kv_bytes_per_token": view["kv_per_token"],
         "n_ctx": view["n_ctx"],
-        "flags": dict(view["flags"]),
+        "flags": view["flags"],
         "server": build_server_dict(view["server"]),
         "server_source": view["server_source"],
         "log_source": view["log_source"],
-        "notes": list(view["notes"]),
+        "notes": view["notes"],
     }
 
 
@@ -143,7 +136,7 @@ def build_gpu_fields(gpu: dict, local_drm: bool) -> dict:
     has_engine = constants.COUNTER_ENGINE in available
     has_shared = local_drm and constants.COUNTER_SHARED in available
     return {
-        "vram_attributed": bool(gpu["attributed"]),
+        "vram_attributed": gpu["attributed"],
         "vram_inferred_by": gpu["inferred_by"] or None,
         "vram_bytes": convert_int_or_none(records.get_shown_vram(gpu)),
         "vram_resident_bytes": convert_int_or_none(gpu["resident_vram"]) if local_drm else None,
@@ -164,11 +157,11 @@ def build_process_dict(row: dict, is_drm: bool) -> dict:
         "host": constants.HOST_OUTSIDE if row["outside"] else None,
         "name": row["name"],
         "kind": row["kind"],
-        "runtimes": list(detail["runtimes"]),
+        "runtimes": detail["runtimes"],
         "started_at": round(created, 3) if created else None,
     }
     entry.update(build_gpu_fields(row["gpu"], is_drm and not row["outside"]))
-    entry["ports"] = list(detail["ports"])
+    entry["ports"] = detail["ports"]
     entry["inside"] = row["inside"]
     entry["model_files"] = [pick_keys(model, MODEL_FILE_KEYS) for model in detail["models"]]
     entry["installed_models"] = [
@@ -195,7 +188,7 @@ def build_gpu_document(snapshot: dict) -> dict:
         "shared_used": snapshot["shared_used"],
         "attributed": records.get_snapshot_attributed(snapshot),
         "backend": snapshot["backend"],
-        "shared_is_spill": bool(snapshot["shared_is_spill"]),
+        "shared_is_spill": snapshot["shared_is_spill"],
         "process_status": snapshot["process_status"] or None,
         "memory_note": records.get_memory_note(snapshot) or None,
         "counter_status": snapshot["counter_status"] or None,

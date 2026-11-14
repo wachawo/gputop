@@ -42,10 +42,7 @@ TOP_MIN_SHARED = 64 * constants.MIB
 SHARED_MIN_SHOWN = constants.MIB
 PERCENT_MIN_SHOWN = 0.5
 PERCENT_BOLD_FROM = 20.0
-MISSING_CELL = "n/a"
-MUTED_STYLE = "grey62"
 RUNTIME_STYLE = "grey70"
-SPILL_KINDS = (constants.KIND_LLM, constants.KIND_AI)
 
 
 def create_column(title: str, justify: str) -> dict:
@@ -174,7 +171,7 @@ def format_table_status(mode: str, show_all: bool) -> str:
 def render_percent_cell(value: float | None) -> Text:
     """Percent cell: n/a when unknown, blank when idle, bold when busy."""
     if value is None:
-        return Text(MISSING_CELL, style=MUTED_STYLE, justify="right")
+        return Text(formatting.MISSING_CELL, style=constants.MUTED_STYLE, justify="right")
     if value < PERCENT_MIN_SHOWN:
         return Text("", justify="right")
     style = "bold" if value >= PERCENT_BOLD_FROM else ""
@@ -183,7 +180,7 @@ def render_percent_cell(value: float | None) -> Text:
 
 def render_pid_cell(row: dict, snapshot: dict) -> Text:
     """PID, marked for a process of another PID namespace."""
-    style = MUTED_STYLE if row["outside"] else ""
+    style = constants.MUTED_STYLE if row["outside"] else ""
     return Text(records.get_pid_label(row), style=style, justify="right")
 
 
@@ -205,7 +202,7 @@ def render_runtime_cell(row: dict, snapshot: dict) -> Text:
 def render_vram_cell(row: dict, snapshot: dict) -> Text:
     """Device memory of the process with its inference mark."""
     known = records.get_shown_vram(row["gpu"]) is not None
-    style = "bold" if known else MUTED_STYLE
+    style = "bold" if known else constants.MUTED_STYLE
     return Text(records.format_vram_label(row["gpu"]), style=style, justify="right")
 
 
@@ -215,16 +212,11 @@ def render_shared_cell(row: dict, snapshot: dict) -> Text:
     if constants.COUNTER_SHARED not in gpu["available"]:
         is_local_drm = snapshot["backend"] == constants.BACKEND_DRM and not row["outside"]
         if is_local_drm:
-            return Text(MISSING_CELL, style=MUTED_STYLE, justify="right")
+            return Text(formatting.MISSING_CELL, style=constants.MUTED_STYLE, justify="right")
         return Text("", justify="right")
     if gpu["shared"] < SHARED_MIN_SHOWN:
         return Text("", justify="right")
-    is_spill = (
-        gpu["shared"] >= constants.SPILL_WARN_BYTES
-        and row["kind"] in SPILL_KINDS
-        and snapshot["shared_is_spill"]
-    )
-    style = "bold red" if is_spill else "yellow"
+    style = "bold red" if records.is_spill(row, snapshot) else "yellow"
     return Text(formatting.format_size(gpu["shared"]), style=style, justify="right")
 
 
@@ -251,21 +243,21 @@ def render_video_cell(row: dict, snapshot: dict) -> Text:
 def render_ram_cell(row: dict, snapshot: dict) -> Text:
     """Resident system memory of the process."""
     if row["ram"] is None:
-        return Text(MISSING_CELL, style=MUTED_STYLE, justify="right")
+        return Text(formatting.MISSING_CELL, style=constants.MUTED_STYLE, justify="right")
     return Text(formatting.format_size(row["ram"]), justify="right")
 
 
 def render_cpu_cell(row: dict, snapshot: dict) -> Text:
     """CPU share of the whole machine; the marker while the process is not rated yet."""
     if row["cpu"] is None and row["ram"] is not None:
-        return Text(constants.NO_READING, style=MUTED_STYLE, justify="right")
+        return Text(constants.NO_READING, style=constants.MUTED_STYLE, justify="right")
     return render_percent_cell(row["cpu"])
 
 
 def render_inside_cell(row: dict, snapshot: dict) -> Text:
     """One-line summary of what the process keeps in GPU memory."""
     is_llm = row["llm"] is not None or row["kind"] == constants.KIND_LLM
-    style = "magenta" if is_llm else MUTED_STYLE
+    style = "magenta" if is_llm else constants.MUTED_STYLE
     return Text(row["inside"], style=style, no_wrap=True, overflow="ellipsis")
 
 

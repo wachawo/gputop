@@ -51,7 +51,6 @@ LEGEND_INDENT = "     "
 LEGEND_MAX_KINDS = 7
 LEGEND_MIN_UNATTRIBUTED = 32 * constants.MIB
 LEGEND_MIN_SHARED = 64 * constants.MIB
-NOTE_STYLE = "grey62"
 SENSOR_STYLE = "grey70"
 LOAD_STYLE = "bold #4ade80"
 MEM_ACTIVITY_STYLE = "#a78bfa"
@@ -263,21 +262,10 @@ def render_chart_note(blocks: list[dict]) -> Text:
     return Text("\n".join(lines))
 
 
-def get_device_name(snapshot: dict) -> str:
-    """Adapter name, else the telemetry name, else a generic label."""
-    adapter = snapshot["adapter"]
-    if adapter is not None and adapter["name"]:
-        return adapter["name"]
-    device = snapshot["device"]
-    if device is not None and device["name"] and device["name"] != constants.UNKNOWN_NAME:
-        return device["name"]
-    return "GPU"
-
-
 def render_name_line(snapshot: dict, slim: bool, paused: bool) -> Text:
     """Line 1 of a device block: name, driver strings, kernel driver, bus address."""
     line = Text()
-    line.append(get_device_name(snapshot), style="bold")
+    line.append(records.get_device_name(snapshot), style="bold")
     device = snapshot["device"]
     if not slim:
         if snapshot["driver"]:
@@ -319,7 +307,7 @@ def render_vram_line(snapshot: dict, totals: dict, width: int) -> Text:
     parts = build_vram_parts(snapshot, totals)
     line.append_text(tui_draw.draw_stacked_bar(parts, snapshot["vram_total"], get_bar_width(width)))
     used_label = formatting.format_size_or_na(snapshot["vram_used"])
-    total_label = formatting.format_size(snapshot["vram_total"]) if snapshot["vram_total"] else "N/A"
+    total_label = formatting.format_size(snapshot["vram_total"]) if snapshot["vram_total"] else formatting.MISSING_SIZE
     line.append(f" {used_label} / {total_label}", style="bold")
     return line
 
@@ -334,12 +322,12 @@ def render_legend_line(snapshot: dict, totals: dict) -> Text:
         line.append(tui_draw.LEGEND_SQUARE, style=constants.UNATTRIBUTED_STYLE)
         line.append(f"unattributed {formatting.format_size(totals['unattributed'])}  ")
     if totals["free"] is not None:
-        line.append(f"free {formatting.format_size(totals['free'])}", style=NOTE_STYLE)
+        line.append(f"free {formatting.format_size(totals['free'])}", style=constants.MUTED_STYLE)
     shared_used = snapshot["shared_used"]
     if shared_used is not None and shared_used > LEGEND_MIN_SHARED:
         line.append(f"   shared(RAM) {formatting.format_size(shared_used)}", style="yellow")
     if totals["scale"] < 1.0:
-        line.append("   [bar normalized; labels are raw]", style=NOTE_STYLE)
+        line.append("   [bar normalized; labels are raw]", style=constants.MUTED_STYLE)
     return line
 
 
@@ -366,8 +354,8 @@ def render_load_line(device: dict) -> Text:
     line.append(f"{records.get_device_label(device)} {load}", style=LOAD_STYLE)
     activity = formatting.format_metric(device["util_mem"], ".0f", "%")
     line.append(f"  Mem activity {activity}", style=MEM_ACTIVITY_STYLE)
-    received = format_pcie_rate(device["pcie_rx_kbs"])
-    sent = format_pcie_rate(device["pcie_tx_kbs"])
+    received = formatting.format_megabytes_per_second(device["pcie_rx_kbs"])
+    sent = formatting.format_megabytes_per_second(device["pcie_tx_kbs"])
     line.append(f"  PCIe↓{received:>5} ↑{sent:>4} MB/s")
     if device["enc"] or device["dec"]:
         encoder = formatting.format_metric(device["enc"], ".0f", "%")
@@ -376,13 +364,6 @@ def render_load_line(device: dict) -> Text:
     if device["video"] is not None:
         line.append(f"  video {formatting.format_metric(device['video'], '.0f', '%')}")
     return line
-
-
-def format_pcie_rate(rate_kbs: int | None) -> str:
-    """PCIe throughput in MB/s without decimals, or N/A."""
-    if rate_kbs is None:
-        return formatting.format_metric(None)
-    return formatting.format_metric(rate_kbs / 1024, ".0f")
 
 
 def format_temperature(device: dict) -> str:
@@ -397,8 +378,7 @@ def format_clock(device: dict, with_maximum: bool) -> str:
     """Main clock of the device: SM, gfx or GT, with the maximum where one is drawn."""
     label, value = records.get_main_clock(device)
     current = formatting.format_metric(value, ".0f")
-    is_amd = device["source"].startswith("AMD ")
-    if with_maximum and not is_amd:
+    if with_maximum and not records.is_amd_device(device):
         maximum = formatting.format_metric(device["sm_clock_max"], ".0f")
         return f"{label} {current}/{maximum} MHz"
     return f"{label} {current} MHz"
@@ -453,7 +433,7 @@ def render_device_block(block: dict, width: int, slim: bool, paused: bool) -> li
     snapshot = block["snapshot"]
     if snapshot is None:
         waiting = format_refresh_error(block["error"]) or DEVICE_PLACEHOLDER
-        lines.append(Text(waiting, style=NOTE_STYLE if block["error"] else ""))
+        lines.append(Text(waiting, style=constants.MUTED_STYLE if block["error"] else ""))
         return lines
     totals = records.compute_kind_totals(snapshot)
     lines.append(render_name_line(snapshot, slim, paused))
@@ -462,7 +442,7 @@ def render_device_block(block: dict, width: int, slim: bool, paused: bool) -> li
     if legend.plain.strip():
         lines.append(legend)
     for note in list_legend_notes(snapshot, block["error"]):
-        lines.append(Text(LEGEND_INDENT + note, style=NOTE_STYLE))
+        lines.append(Text(LEGEND_INDENT + note, style=constants.MUTED_STYLE))
     if snapshot["device"] is not None:
         lines.append(render_load_line(snapshot["device"]))
         lines.append(render_sensor_line(snapshot["device"], slim))
@@ -504,14 +484,14 @@ def build_ram_tail(sample: dict, room: int) -> Text:
     used_label = formatting.format_size(sample["ram_used"])
     total_label = formatting.format_size(sample["ram_total"])
     tail.append(f" {used_label} / {total_label}", style="bold")
-    tail.append(f"  {compute_ram_percent(sample) or 0.0:.0f}%", style=NOTE_STYLE)
+    tail.append(f"  {compute_ram_percent(sample) or 0.0:.0f}%", style=constants.MUTED_STYLE)
     free_piece = f"  free {formatting.format_size(sample['ram_available'])}"
-    append_tail_piece(tail, free_piece, NOTE_STYLE, room)
+    append_tail_piece(tail, free_piece, constants.MUTED_STYLE, room)
     if sample["swap_total"] > 0:
         swap_used = formatting.format_size(sample["swap_used"])
         swap_total = formatting.format_size(sample["swap_total"])
         heavy = sample["swap_used"] > sample["swap_total"] / 4
-        append_tail_piece(tail, f"  swap {swap_used}/{swap_total}", "yellow" if heavy else NOTE_STYLE, room)
+        append_tail_piece(tail, f"  swap {swap_used}/{swap_total}", "yellow" if heavy else constants.MUTED_STYLE, room)
     return tail
 
 
@@ -524,7 +504,7 @@ def build_cpu_tail(sample: dict, room: int, slim: bool) -> Text:
     counts = f"  {sample['logical']} threads"
     if sample["physical"] is not None:
         counts += f"/{sample['physical']} cores"
-    append_tail_piece(tail, counts, NOTE_STYLE, room)
+    append_tail_piece(tail, counts, constants.MUTED_STYLE, room)
     return tail
 
 
@@ -564,20 +544,20 @@ def render_thread_line(sample: dict) -> Text:
 
 
 def render_system_history_line(cpu_history, ram_history, room: int) -> Text:
-    """CPU and RAM sparklines of the last minute."""
-    spark_width = max(8, min(30, (room - 18) // 2))
+    """CPU and RAM sparklines of the recent samples."""
+    spark_width = max(8, min(30, (room - 10) // 2))
     line = Text(LEGEND_INDENT)
     line.append_text(tui_draw.draw_sparkline(cpu_history, spark_width, 100.0, SYSTEM_CPU_STYLE))
-    line.append(" CPU 60s   ", style=SYSTEM_CAPTION_STYLE)
+    line.append(" CPU   ", style=SYSTEM_CAPTION_STYLE)
     line.append_text(tui_draw.draw_sparkline(ram_history, spark_width, 100.0, SYSTEM_RAM_STYLE))
-    line.append(" RAM 60s", style=SYSTEM_CAPTION_STYLE)
+    line.append(" RAM", style=SYSTEM_CAPTION_STYLE)
     return line
 
 
 def render_top_ram_line(sample: dict) -> Text:
     """The five largest processes by resident memory."""
     line = Text(LEGEND_INDENT)
-    line.append("top RAM: ", style=NOTE_STYLE)
+    line.append("top RAM: ", style=constants.MUTED_STYLE)
     largest = system.get_top_procs(sample, "rss", SYSTEM_TOP_COUNT)
     entries = [f"{proc['name']} {formatting.format_size(proc['rss'])}" for proc in largest]
     line.append("  ".join(entries))
@@ -587,7 +567,7 @@ def render_top_ram_line(sample: dict) -> Text:
 def render_top_cpu_line(sample: dict) -> Text:
     """The busiest processes; idle when none is busy, the marker when none is rated yet."""
     line = Text(LEGEND_INDENT)
-    line.append("top CPU: ", style=NOTE_STYLE)
+    line.append("top CPU: ", style=constants.MUTED_STYLE)
     rated = system.get_top_procs(sample, "cpu_pct", SYSTEM_TOP_COUNT)
     busy = [proc for proc in rated if proc["cpu_pct"] >= SYSTEM_MIN_CPU_PCT]
     if busy:

@@ -45,7 +45,6 @@ SOURCE_ESTIMATED = "estimated"
 PLACEHOLDER_NAMES = (constants.UNKNOWN_NAME, constants.OUTSIDE_NAME)
 
 # Text form
-MISSING = "N/A"
 NOT_LISTED = "not listed"
 HALF_MIB = constants.MIB / 2
 INTRO_LINES = (
@@ -415,13 +414,13 @@ def compare_snapshots(before: dict, after: dict) -> dict:
 
 def format_plain_size(value) -> str:
     """A size, or N/A when unknown."""
-    return formatting.format_size_or_na(value, MISSING)
+    return formatting.format_size_or_na(value, formatting.MISSING_SIZE)
 
 
 def format_signed_size(value) -> str:
     """A signed size: N/A when unknown, `0 MB` below half a mebibyte."""
     if value is None:
-        return MISSING
+        return formatting.MISSING_SIZE
     if abs(value) < HALF_MIB:
         return "0 MB"
     sign = "+" if value > 0 else "-"
@@ -441,9 +440,8 @@ def is_changed(entry: dict) -> bool:
     """True when a per-process object is worth a row in the text form."""
     if entry["match"] in (MATCH_NEW, MATCH_GONE):
         return True
-    for triple in entry["measured"].values():
-        if triple["delta"] is not None and abs(triple["delta"]) >= constants.DIFF_NOISE_BYTES:
-            return True
+    if any(has_moved(triple) for triple in entry["measured"].values()):
+        return True
     runtime_block = entry["runtime"]
     if runtime_block is not None:
         context = runtime_block["n_ctx"]
@@ -525,8 +523,8 @@ def render_runtime_lines(runtime_block: dict | None) -> list[str]:
     lines = []
     context = runtime_block["n_ctx"]
     if context["before"] != context["after"]:
-        before = MISSING if context["before"] is None else context["before"]
-        after = MISSING if context["after"] is None else context["after"]
+        before = formatting.MISSING_SIZE if context["before"] is None else context["before"]
+        after = formatting.MISSING_SIZE if context["after"] is None else context["after"]
         lines.append(f"  context length  {before} -> {after}")
     for kind, triple in runtime_block["segments"].items():
         if not has_moved(triple):

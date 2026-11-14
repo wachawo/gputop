@@ -21,8 +21,9 @@ RESET_ERROR_CODES = (1, 9, 15)
 REFRESH_SECONDS = 5.0
 # Per-process memory at or above this value is the "not available" sentinel of the driver.
 MEMORY_NOT_AVAILABLE = 1 << 63
-# Performance state number the driver reports when it cannot tell the state.
-PSTATE_UNKNOWN = 32
+# A per-process load sample stays on screen this long without a newer one: the driver
+# publishes samples on its own clock, so a refresh can fall between two of them.
+LOAD_HOLD_SECONDS = 2.0
 
 # Throttle bits worth reporting, in display order. Idle, sync boost and the display clock
 # setting are normal operating states and are left out.
@@ -70,7 +71,7 @@ def extract_bus_id(pci_info) -> str:
     """Return the PCI bus id of an NVML PCI info structure, '' when absent."""
     if pci_info is None:
         return ""
-    return decode_text(getattr(pci_info, "busId", None))
+    return decode_text(pci_info.busId)
 
 
 def compute_handle_key(index: int, bus_id: str) -> int:
@@ -89,7 +90,7 @@ def read_nvml(state: dict, function_name: str, *arguments):
     try:
         function = getattr(pynvml, function_name)
         return function(*arguments)
-    except Exception as exc:
+    except (pynvml.NVMLError, AttributeError) as exc:
         if is_reset_error(exc):
             state["needs_reset"] = True
         return None
@@ -100,31 +101,24 @@ def read_first_element(state: dict, function_name: str, handle) -> float | None:
     result = read_nvml(state, function_name, handle)
     if result is None:
         return None
-    try:
-        return float(result[0])
-    except (TypeError, IndexError, ValueError):
-        return None
+    return float(result[0])
 
 
 def build_adapter(index: int) -> dict | None:
     """Build the adapter record of one NVML index; None when it cannot be described."""
     try:
         handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML device {index} skipped: {type(exc).__name__}: {exc}")
         return None
-    try:
-        bus_id = extract_bus_id(pynvml.nvmlDeviceGetPciInfo(handle))
-    except Exception:
-        bus_id = ""
     try:
         name = decode_text(pynvml.nvmlDeviceGetName(handle))
         memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
         total = int(memory.total)
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML device {index} not listed: {type(exc).__name__}: {exc}")
         return None
-    key = compute_handle_key(index, bus_id)
+    key = create_handle_entry(index, handle)["key"]
     return records.create_adapter(key, name, constants.VENDOR_NVIDIA, total, 0)
 
 
@@ -147,22 +141,46 @@ def list_nvidia_adapters() -> list[dict]:
         return []
     try:
         pynvml.nvmlInit()
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML not available: {type(exc).__name__}: {exc}")
         return []
     try:
         return read_adapter_list()
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML enumeration failed: {type(exc).__name__}: {exc}")
         return []
     finally:
         try:
             pynvml.nvmlShutdown()
-        except Exception:
+        except pynvml.NVMLError:
             pass
 
 
-def create_nvidia_state(adapter: dict | None, gpu_index: int) -> dict:
+def create_shared_reads() -> dict:
+    """Create the per-tick reads that collectors of one program share.
+
+    The process lists of every device and the PID-namespace resolution are machine-wide,
+    so the collectors of several NVIDIA cards read them once per tick instead of once each.
+
+    Keys:
+      readers     set[int]            ids of the states that already used the current reads
+      procs       dict[int, dict]     NVML index to the device process map of this tick
+      compute     set[int]            pids in the compute list of any device
+      foreign     set[int]            pids of another PID namespace
+      matches     dict[int, tuple]    host pid to (local pid, confidence)
+      matcher     dict                pidns matcher state
+    """
+    return {
+        "readers": set(),
+        "procs": {},
+        "compute": set(),
+        "foreign": set(),
+        "matches": {},
+        "matcher": pidns.create_matcher(),
+    }
+
+
+def create_nvidia_state(adapter: dict | None, gpu_index: int, shared: dict | None) -> dict:
     """Create the long-lived NVML state of one collector.
 
     Keys:
@@ -173,7 +191,8 @@ def create_nvidia_state(adapter: dict | None, gpu_index: int) -> dict:
       driver      str             driver version, '' when unknown
       cuda        str             CUDA driver version as major.minor, '' when unknown
       cursors     dict[int, int]  adapter key to the last consumed utilisation timestamp
-      matcher     dict            pidns matcher state
+      loads       dict[int, dict] pid to its last load sample: time (monotonic), sm, enc, dec
+      shared      dict            shared per-tick reads, see create_shared_reads
       needs_reset bool            a reset error was seen; the next refresh rebuilds the session
       refreshed   float or None   monotonic time of the last refresh, None before the first
     """
@@ -185,7 +204,8 @@ def create_nvidia_state(adapter: dict | None, gpu_index: int) -> dict:
         "driver": "",
         "cuda": "",
         "cursors": {},
-        "matcher": pidns.create_matcher(),
+        "loads": {},
+        "shared": shared if shared is not None else create_shared_reads(),
         "needs_reset": False,
         "refreshed": None,
     }
@@ -196,7 +216,7 @@ def stop_session(state: dict) -> None:
     if state["session"]:
         try:
             pynvml.nvmlShutdown()
-        except Exception:
+        except pynvml.NVMLError:
             pass
     state["session"] = False
     state["handles"] = []
@@ -206,7 +226,7 @@ def start_session(state: dict) -> bool:
     """Initialise the library for this state; False when it is not available yet."""
     try:
         pynvml.nvmlInit()
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML init failed: {type(exc).__name__}: {exc}")
         return False
     state["session"] = True
@@ -217,7 +237,7 @@ def create_handle_entry(index: int, handle) -> dict:
     """Describe one device handle: index, handle, bus id and adapter key."""
     try:
         bus_id = extract_bus_id(pynvml.nvmlDeviceGetPciInfo(handle))
-    except Exception:
+    except pynvml.NVMLError:
         bus_id = ""
     return {
         "index": index,
@@ -231,7 +251,7 @@ def load_handles(state: dict) -> bool:
     """Re-read the handle list; False when the session had to be dropped."""
     try:
         count = pynvml.nvmlDeviceGetCount()
-    except Exception as exc:
+    except pynvml.NVMLError as exc:
         logger.debug(f"NVML device count failed: {type(exc).__name__}: {exc}")
         stop_session(state)
         return False
@@ -240,7 +260,7 @@ def load_handles(state: dict) -> bool:
     for index in range(count):
         try:
             handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-        except Exception as exc:
+        except pynvml.NVMLError as exc:
             reset_seen = reset_seen or is_reset_error(exc)
             continue
         handles.append(create_handle_entry(index, handle))
@@ -250,15 +270,11 @@ def load_handles(state: dict) -> bool:
     return True
 
 
-def format_cuda_version(encoded) -> str:
-    """Turn major * 1000 + minor * 10 into 'major.minor'; '' for zero or garbage."""
-    try:
-        number = int(encoded)
-    except (TypeError, ValueError):
+def format_cuda_version(encoded: int | None) -> str:
+    """Turn major * 1000 + minor * 10 into 'major.minor'; '' when unknown."""
+    if not encoded:
         return ""
-    if number <= 0:
-        return ""
-    return f"{number // 1000}.{(number % 1000) // 10}"
+    return f"{encoded // 1000}.{(encoded % 1000) // 10}"
 
 
 def load_versions(state: dict) -> None:
@@ -292,13 +308,14 @@ def is_refresh_due(state: dict) -> bool:
     return time.monotonic() - state["refreshed"] >= REFRESH_SECONDS
 
 
-def open_nvidia(adapter: dict | None, gpu_index: int) -> dict:
+def open_nvidia(adapter: dict | None, gpu_index: int, shared: dict | None = None) -> dict:
     """Open the NVML state for one adapter (None: the device with NVML index gpu_index).
 
-    Never raises. Without the binding the state stays inert for good; when the library does
+    `shared` is the create_shared_reads record of the program when several collectors are
+    open at once; None gives this state its own. Never raises. Without the binding the state stays inert for good; when the library does
     not initialise, the state has no session and the refresh keeps retrying.
     """
-    state = create_nvidia_state(adapter, gpu_index)
+    state = create_nvidia_state(adapter, gpu_index, shared)
     if pynvml is None:
         return state
     try:
@@ -317,17 +334,14 @@ def close_nvidia(state: dict) -> None:
 
 def fold_process_entry(device_procs: dict, entry, is_compute: bool) -> None:
     """Fold one running-process entry into the per-device process map."""
-    pid = getattr(entry, "pid", None)
-    if pid is None:
-        return
-    pid = int(pid)
+    pid = int(entry.pid)
     gpu = device_procs["procs"].get(pid)
     if gpu is None:
         gpu = records.create_proc_gpu({constants.COUNTER_DEDICATED, constants.COUNTER_ENGINE})
         device_procs["procs"][pid] = gpu
     if is_compute:
         device_procs["compute"].add(pid)
-    used = getattr(entry, "usedGpuMemory", None)
+    used = entry.usedGpuMemory
     if used is None or used >= MEMORY_NOT_AVAILABLE:
         gpu["attributed"] = False
         return
@@ -373,33 +387,36 @@ def add_engine_load(gpu: dict, engine: str, value) -> None:
 def apply_utilisation(
     state: dict, entry: dict, device_procs: dict, compute_pids: set
 ) -> None:
-    """Read the per-process utilisation samples newer than the cursor and apply them.
+    """Read the per-process utilisation samples newer than the cursor and apply the loads.
 
-    No samples, an unsupported call or an error leave the cursor alone; processes without a
-    new sample keep an empty engine map and so read 0 %. compute_pids is the compute-list
-    set of this sample over every device; it decides the engine the SM load is booked on.
+    No samples, an unsupported call or an error leave the cursor alone. A process without a
+    new sample keeps its last one for LOAD_HOLD_SECONDS, so a refresh that falls between
+    two driver samples does not read 0 %. compute_pids is the compute-list set of this
+    sample over every device; it decides the engine the SM load is booked on.
     """
     cursor = state["cursors"].get(entry["key"], 0)
     samples = read_nvml(state, "nvmlDeviceGetProcessUtilization", entry["handle"], cursor)
-    if not samples:
-        return
-    newest = reduce_utilisation(samples)
-    if not newest:
-        return
-    timestamps = []
-    for sample in newest.values():
-        timestamps.append(int(sample.timeStamp))
-    state["cursors"][entry["key"]] = max(timestamps)
+    newest = reduce_utilisation(samples or [])
+    now = time.monotonic()
+    loads = state["loads"]
     for pid, sample in newest.items():
+        loads[pid] = {
+            "time": now, "sm": sample.smUtil, "enc": sample.encUtil, "dec": sample.decUtil
+        }
+    if newest:
+        state["cursors"][entry["key"]] = max(int(sample.timeStamp) for sample in newest.values())
+    for pid in list(loads):
         gpu = device_procs["procs"].get(pid)
-        if gpu is None:
+        load = loads[pid]
+        if gpu is None or now - load["time"] > LOAD_HOLD_SECONDS:
+            del loads[pid]
             continue
         sm_engine = constants.ENGINE_3D
         if pid in compute_pids:
             sm_engine = constants.ENGINE_COMPUTE
-        add_engine_load(gpu, sm_engine, getattr(sample, "smUtil", 0))
-        add_engine_load(gpu, constants.ENGINE_ENCODE, getattr(sample, "encUtil", 0))
-        add_engine_load(gpu, constants.ENGINE_DECODE, getattr(sample, "decUtil", 0))
+        add_engine_load(gpu, sm_engine, load["sm"])
+        add_engine_load(gpu, constants.ENGINE_ENCODE, load["enc"])
+        add_engine_load(gpu, constants.ENGINE_DECODE, load["dec"])
 
 
 def read_identity(state: dict, handle, device: dict) -> None:
@@ -414,7 +431,7 @@ def read_memory_info(state: dict, handle):
     """Return (memory info, has_reserved): the v2 structure, else the plain one."""
     try:
         info = pynvml.nvmlDeviceGetMemoryInfo(handle, version=pynvml.nvmlMemory_v2)
-    except Exception as exc:
+    except (pynvml.NVMLError, AttributeError, TypeError) as exc:
         if is_reset_error(exc):
             state["needs_reset"] = True
         info = None
@@ -428,20 +445,17 @@ def read_memory(state: dict, handle, device: dict) -> None:
     info, has_reserved = read_memory_info(state, handle)
     if info is None:
         return
-    device["mem_total"] = convert_int(getattr(info, "total", None))
-    device["mem_used"] = convert_int(getattr(info, "used", None))
-    reserved = 0
-    if has_reserved:
-        reserved = getattr(info, "reserved", 0) or 0
-    device["mem_reserved"] = int(reserved)
+    device["mem_total"] = int(info.total)
+    device["mem_used"] = int(info.used)
+    device["mem_reserved"] = int(info.reserved) if has_reserved else 0
 
 
 def read_load(state: dict, handle, device: dict) -> None:
     """Fill GPU utilisation, memory activity, encoder and decoder load."""
     rates = read_nvml(state, "nvmlDeviceGetUtilizationRates", handle)
     if rates is not None:
-        device["util_gpu"] = convert_float(getattr(rates, "gpu", None))
-        device["util_mem"] = convert_float(getattr(rates, "memory", None))
+        device["util_gpu"] = float(rates.gpu)
+        device["util_mem"] = float(rates.memory)
     device["enc"] = read_first_element(state, "nvmlDeviceGetEncoderUtilization", handle)
     device["dec"] = read_first_element(state, "nvmlDeviceGetDecoderUtilization", handle)
 
@@ -457,14 +471,14 @@ def read_milliwatts(state: dict, function_name: str, handle) -> float | None:
 def read_performance_state(state: dict, handle) -> int | None:
     """Return the performance state number; None when unreadable or reported as unknown."""
     pstate = convert_int(read_nvml(state, "nvmlDeviceGetPerformanceState", handle))
-    if pstate == getattr(pynvml, "NVML_PSTATE_UNKNOWN", PSTATE_UNKNOWN):
+    if pstate == pynvml.NVML_PSTATE_UNKNOWN:
         return None
     return pstate
 
 
 def read_thermal(state: dict, handle, device: dict) -> None:
     """Fill temperature, power draw and limit, fan and performance state."""
-    sensor = getattr(pynvml, "NVML_TEMPERATURE_GPU", 0)
+    sensor = pynvml.NVML_TEMPERATURE_GPU
     device["temp"] = convert_float(read_nvml(state, "nvmlDeviceGetTemperature", handle, sensor))
     device["power_w"] = read_milliwatts(state, "nvmlDeviceGetPowerUsage", handle)
     device["power_limit_w"] = read_milliwatts(state, "nvmlDeviceGetEnforcedPowerLimit", handle)
@@ -472,38 +486,31 @@ def read_thermal(state: dict, handle, device: dict) -> None:
     device["pstate"] = read_performance_state(state, handle)
 
 
-def read_clock(state: dict, function_name: str, handle, clock_name: str) -> int | None:
-    """Return one clock in MHz; None when the clock id or the reading is missing."""
-    clock_id = getattr(pynvml, clock_name, None)
-    if clock_id is None:
-        return None
+def read_clock(state: dict, function_name: str, handle, clock_id: int) -> int | None:
+    """Return one clock in MHz; None when the reading is missing."""
     return convert_int(read_nvml(state, function_name, handle, clock_id))
 
 
 def read_clocks(state: dict, handle, device: dict) -> None:
     """Fill the SM, memory and video clocks."""
-    device["sm_clock"] = read_clock(state, "nvmlDeviceGetClockInfo", handle, "NVML_CLOCK_SM")
+    current = "nvmlDeviceGetClockInfo"
+    device["sm_clock"] = read_clock(state, current, handle, pynvml.NVML_CLOCK_SM)
     device["sm_clock_max"] = read_clock(
-        state, "nvmlDeviceGetMaxClockInfo", handle, "NVML_CLOCK_SM"
+        state, "nvmlDeviceGetMaxClockInfo", handle, pynvml.NVML_CLOCK_SM
     )
-    device["mem_clock"] = read_clock(state, "nvmlDeviceGetClockInfo", handle, "NVML_CLOCK_MEM")
-    device["video_clock"] = read_clock(
-        state, "nvmlDeviceGetClockInfo", handle, "NVML_CLOCK_VIDEO"
-    )
+    device["mem_clock"] = read_clock(state, current, handle, pynvml.NVML_CLOCK_MEM)
+    device["video_clock"] = read_clock(state, current, handle, pynvml.NVML_CLOCK_VIDEO)
 
 
-def read_throughput(state: dict, handle, counter_name: str) -> int | None:
+def read_throughput(state: dict, handle, counter_id: int) -> int | None:
     """Return one PCIe throughput counter in KB/s."""
-    counter_id = getattr(pynvml, counter_name, None)
-    if counter_id is None:
-        return None
     return convert_int(read_nvml(state, "nvmlDeviceGetPcieThroughput", handle, counter_id))
 
 
 def read_pcie(state: dict, handle, device: dict) -> None:
     """Fill PCIe throughput, link generation and link width."""
-    device["pcie_rx_kbs"] = read_throughput(state, handle, "NVML_PCIE_UTIL_RX_BYTES")
-    device["pcie_tx_kbs"] = read_throughput(state, handle, "NVML_PCIE_UTIL_TX_BYTES")
+    device["pcie_rx_kbs"] = read_throughput(state, handle, pynvml.NVML_PCIE_UTIL_RX_BYTES)
+    device["pcie_tx_kbs"] = read_throughput(state, handle, pynvml.NVML_PCIE_UTIL_TX_BYTES)
     device["pcie_gen"] = convert_int(
         read_nvml(state, "nvmlDeviceGetCurrPcieLinkGeneration", handle)
     )
@@ -536,10 +543,7 @@ def read_compute_capability(state: dict, handle) -> str:
     capability = read_nvml(state, "nvmlDeviceGetCudaComputeCapability", handle)
     if capability is None:
         return ""
-    try:
-        return f"{int(capability[0])}.{int(capability[1])}"
-    except (TypeError, IndexError, ValueError):
-        return ""
+    return f"{int(capability[0])}.{int(capability[1])}"
 
 
 def read_device(state: dict, entry: dict) -> dict:
@@ -580,7 +584,7 @@ def read_used_memory(state: dict, handle) -> int | None:
     info = read_nvml(state, "nvmlDeviceGetMemoryInfo", handle)
     if info is None:
         return None
-    return convert_int(getattr(info, "used", None))
+    return int(info.used)
 
 
 def read_selected_device(
@@ -595,33 +599,45 @@ def read_selected_device(
     sample["device"] = device
 
 
-def collect_compute_pids(all_device_procs: list[dict]) -> set:
-    """Return the pids found in the compute list of any device in this sample."""
-    compute_pids = set()
-    for device_procs in all_device_procs:
-        compute_pids.update(device_procs["compute"])
-    return compute_pids
+def resolve_foreign_pids(shared: dict) -> None:
+    """Run the PID-namespace resolution over every device of the shared reads.
 
-
-def resolve_foreign_pids(
-    state: dict, all_device_procs: list[dict], compute_pids: set
-) -> tuple[set, dict]:
-    """Run the PID-namespace resolution over every device.
-
-    Returns (foreign pids, host pid to (local pid, confidence)). The matcher is fed on every
-    call, with two empty lists when nothing is foreign.
+    Fills foreign (pids) and matches (host pid to (local pid, confidence)). The matcher is
+    fed on every call, with two empty lists when nothing is foreign.
     """
     reported = set()
-    for device_procs in all_device_procs:
+    for device_procs in shared["procs"].values():
         reported.update(device_procs["procs"])
-    foreign = pidns.find_foreign_pids(reported)
-    if not foreign:
-        pidns.match_foreign_pids(state["matcher"], [], [])
-        return foreign, {}
-    host_pids = sorted(foreign & compute_pids)
-    local_pids = pidns.list_cuda_candidates(reported - foreign)
-    matches = pidns.match_foreign_pids(state["matcher"], host_pids, local_pids)
-    return foreign, matches
+    shared["foreign"] = pidns.find_foreign_pids(reported)
+    if not shared["foreign"]:
+        pidns.match_foreign_pids(shared["matcher"], [], [])
+        shared["matches"] = {}
+        return
+    host_pids = sorted(shared["foreign"] & shared["compute"])
+    local_pids = pidns.list_cuda_candidates(reported - shared["foreign"])
+    shared["matches"] = pidns.match_foreign_pids(shared["matcher"], host_pids, local_pids)
+
+
+def refresh_shared_reads(state: dict) -> dict:
+    """Return the shared reads of this tick, reading them when this state starts a new one.
+
+    A state that already used the current reads is on its next sample, which is a new tick
+    for every collector; the other states of the program then reuse what it read.
+    """
+    shared = state["shared"]
+    reader = id(state)
+    if shared["readers"] and reader not in shared["readers"]:
+        shared["readers"].add(reader)
+        return shared
+    shared["readers"] = {reader}
+    shared["procs"] = {}
+    shared["compute"] = set()
+    for entry in state["handles"]:
+        device_procs = read_device_procs(state, entry["handle"])
+        shared["procs"][entry["index"]] = device_procs
+        shared["compute"].update(device_procs["compute"])
+    resolve_foreign_pids(shared)
+    return shared
 
 
 def get_outside_order(item: tuple) -> tuple:
@@ -658,21 +674,18 @@ def fill_sample(state: dict, sample: dict) -> None:
     """Take one sample from an open session into a fresh backend sample."""
     sample["driver"] = state["driver"]
     sample["cuda"] = state["cuda"]
-    all_device_procs = []
-    for entry in state["handles"]:
-        all_device_procs.append(read_device_procs(state, entry["handle"]))
-    compute_pids = collect_compute_pids(all_device_procs)
+    shared = refresh_shared_reads(state)
     position = find_selected_position(state)
-    if position is not None:
-        selected_entry = state["handles"][position]
-        read_selected_device(
-            state, selected_entry, all_device_procs[position], compute_pids, sample
-        )
-    foreign, matches = resolve_foreign_pids(state, all_device_procs, compute_pids)
     if position is None:
         return
-    selected_procs = all_device_procs[position]["procs"]
-    local, outside = split_foreign_procs(selected_procs, foreign, matches)
+    selected_entry = state["handles"][position]
+    device_procs = shared["procs"].get(selected_entry["index"])
+    if device_procs is None:
+        return
+    read_selected_device(state, selected_entry, device_procs, shared["compute"], sample)
+    local, outside = split_foreign_procs(
+        device_procs["procs"], shared["foreign"], shared["matches"]
+    )
     sample["procs"] = local
     sample["outside"] = outside
 

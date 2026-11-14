@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Process kind, vLLM signature, Ollama runner test and the "what's inside" summary."""
-import logging
 import re
-import traceback
 
 # Local imports
 from gputop import cmdline
@@ -81,8 +79,6 @@ INSIDE_MAX_ITEMS = 2
 PATH_ARG_PREFIX = "path-arg (unproven): "
 INSTALLED_PREFIX = "installed (unproven): "
 
-logger = logging.getLogger(__name__)
-
 
 def has_detail_evidence(detail: dict) -> bool:
     """Tell whether any model of the detail has model evidence."""
@@ -127,16 +123,13 @@ def is_vllm_server_cmdline(arguments: list[str]) -> bool:
 
 def get_vllm_role(detail: dict) -> str:
     """Return the vLLM role of a process by its signature: worker, server or ""."""
-    try:
-        arguments = detail["cmdline"]
-        first_argument = arguments[0] if arguments else ""
-        for title in (detail["name"], first_argument):
-            if VLLM_WORKER_PATTERN.match(title) is not None:
-                return constants.VLLM_ROLE_WORKER
-        if is_vllm_server_cmdline(arguments):
-            return constants.VLLM_ROLE_SERVER
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    arguments = detail["cmdline"]
+    first_argument = arguments[0] if arguments else ""
+    for title in (detail["name"], first_argument):
+        if VLLM_WORKER_PATTERN.match(title) is not None:
+            return constants.VLLM_ROLE_WORKER
+    if is_vllm_server_cmdline(arguments):
+        return constants.VLLM_ROLE_SERVER
     return ""
 
 
@@ -164,23 +157,20 @@ def is_ambiguous_flag(flag: str) -> bool:
 
 def is_vllm_ambiguous(arguments: list[str]) -> bool:
     """Tell whether the vLLM launch flags describe a layout whose API port cannot be attributed."""
-    try:
-        for position, argument in enumerate(arguments):
-            flag, value = cmdline.split_flag(argument)
-            if flag.startswith("--"):
-                flag = flag.replace("_", "-")
-            if is_ambiguous_flag(flag):
-                return True
-            allowed = VLLM_SINGLE_NODE_VALUES.get(flag)
-            if allowed is None:
-                continue
-            if value is None:
-                following = arguments[position + 1:position + 2]
-                value = following[0] if following else ""
-            if value != allowed:
-                return True
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    for position, argument in enumerate(arguments):
+        flag, value = cmdline.split_flag(argument)
+        if flag.startswith("--"):
+            flag = flag.replace("_", "-")
+        if is_ambiguous_flag(flag):
+            return True
+        allowed = VLLM_SINGLE_NODE_VALUES.get(flag)
+        if allowed is None:
+            continue
+        if value is None:
+            following = arguments[position + 1:position + 2]
+            value = following[0] if following else ""
+        if value != allowed:
+            return True
     return False
 
 
@@ -246,35 +236,27 @@ def classify_graphics(detail: dict, lowered_name: str, engines: dict, doing_vide
 
 def classify_process(detail: dict, engines: dict[str, float]) -> str:
     """Return the kind of a process from its detail and its per-engine load; first rule wins."""
-    try:
-        lowered_name = detail["name"].lower()
-        if lowered_name in COMPOSITOR_NAMES:
-            return constants.KIND_COMPOSITOR
-        doing_video = is_doing_video(engines)
-        ai_kind = classify_ai(detail, lowered_name, doing_video)
-        if ai_kind:
-            return ai_kind
-        return classify_graphics(detail, lowered_name, engines, doing_video)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        return constants.KIND_APP
+    lowered_name = detail["name"].lower()
+    if lowered_name in COMPOSITOR_NAMES:
+        return constants.KIND_COMPOSITOR
+    doing_video = is_doing_video(engines)
+    ai_kind = classify_ai(detail, lowered_name, doing_video)
+    if ai_kind:
+        return ai_kind
+    return classify_graphics(detail, lowered_name, engines, doing_video)
 
 
 def is_ollama_runner(detail: dict, kind: str) -> bool:
     """Tell whether an AI row is an Ollama model runner process."""
-    try:
-        if kind not in constants.AI_KINDS:
-            return False
-        lowered_exe = detail["exe"].lower()
-        if OLLAMA_PATH_PART in lowered_exe:
-            return True
-        lowered_name = detail["name"].lower()
-        if not lowered_name.startswith(OLLAMA_NAME_PREFIX):
-            return False
-        return OLLAMA_RUNNER_ARGUMENT in detail["cmdline"]
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    if kind not in constants.AI_KINDS:
         return False
+    lowered_exe = detail["exe"].lower()
+    if OLLAMA_PATH_PART in lowered_exe:
+        return True
+    lowered_name = detail["name"].lower()
+    if not lowered_name.startswith(OLLAMA_NAME_PREFIX):
+        return False
+    return OLLAMA_RUNNER_ARGUMENT in detail["cmdline"]
 
 
 def describe_models(models: list[dict]) -> str:
@@ -299,17 +281,13 @@ def describe_candidates(candidates: list[dict]) -> str:
 
 def describe_inside(detail: dict, kind: str, view: dict | None) -> str:
     """Return the one-line summary of what a process holds on the GPU; first match wins."""
-    try:
-        if view is not None and view.get("summary"):
-            return view["summary"]
-        if detail["models"]:
-            return describe_models(detail["models"])
-        if detail["candidates"]:
-            return describe_candidates(detail["candidates"])
-        return constants.KIND_INSIDE_TEXT.get(kind, "")
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        return ""
+    if view is not None and view["summary"]:
+        return view["summary"]
+    if detail["models"]:
+        return describe_models(detail["models"])
+    if detail["candidates"]:
+        return describe_candidates(detail["candidates"])
+    return constants.KIND_INSIDE_TEXT.get(kind, "")
 
 
 def main():

@@ -13,6 +13,7 @@ import traceback
 
 # Local imports
 from gputop import constants
+from gputop import formatting
 
 # Transport
 PROBE_HOST = "127.0.0.1"
@@ -21,10 +22,12 @@ MAX_BODY_BYTES = 4 * constants.MIB
 READ_CHUNK_BYTES = 64 * 1024
 STATUS_OK = 200
 STATUS_UNAUTHORIZED = 401
+STATUS_UNAVAILABLE = 503
 
 # Cache
 POSITIVE_TTL = 3.0
 NEGATIVE_TTL = 30.0
+LOADING_TTL = 3.0
 CACHE_PRUNE_SIZE = 256
 
 # Response fields
@@ -82,8 +85,17 @@ def create_reply() -> dict:
 
 
 def create_outcome(server: dict | None, unauthorized: bool) -> dict:
-    """Create a cache entry: time (monotonic seconds), server (or None), unauthorized (bool)."""
-    return {"time": time.monotonic(), "server": server, "unauthorized": unauthorized}
+    """Create a cache entry: time (monotonic seconds), server (or None), unauthorized (bool).
+
+    `loading` is set by the probe when the server answered 503: it is still loading its
+    model and is asked again soon instead of being written off for NEGATIVE_TTL.
+    """
+    return {
+        "time": time.monotonic(),
+        "server": server,
+        "unauthorized": unauthorized,
+        "loading": False,
+    }
 
 
 def open_prober() -> dict:
@@ -153,26 +165,13 @@ def fetch_reply(port: int, path: str, api_key: str) -> dict:
         reply["status"] = None
         reply["text"] = None
     finally:
-        try:
-            connection.close()
-        except Exception:
-            pass
+        connection.close()
     if reply["text"] is not None:
         try:
             reply["data"] = json.loads(reply["text"])
         except (ValueError, RecursionError):
             reply["data"] = None
     return reply
-
-
-def convert_to_int(value) -> int | None:
-    """Integer form of a JSON number, None for anything else."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    try:
-        return int(value)
-    except (ValueError, OverflowError):
-        return None
 
 
 def convert_to_text(value) -> str | None:
@@ -211,16 +210,19 @@ def build_llama_model(item, model_path: str | None) -> dict:
     meta = get_field(item, "meta")
     ftype = get_field(meta, "ftype")
     entry["quant"] = None if ftype is None else str(ftype)
-    entry["ctx"] = convert_to_int(get_field(meta, "n_ctx"))
-    entry["size"] = convert_to_int(get_field(meta, "size"))
+    entry["ctx"] = formatting.convert_to_int(get_field(meta, "n_ctx"))
+    entry["size"] = formatting.convert_to_int(get_field(meta, "size"))
     entry["path"] = model_path
     return entry
 
 
 def list_llama_models(port: int, api_key: str, server: dict, previous: dict | None) -> list[dict]:
-    """Model identity of a llama.cpp server; refetched only when the model path changed."""
+    """Model identity of a llama.cpp server; refetched only when the model path changed.
+
+    An empty previous list is never reused: it may be a request that timed out.
+    """
     if previous is not None and previous["kind"] == constants.SERVER_LLAMA:
-        if previous["model_path"] == server["model_path"]:
+        if previous["models"] and previous["model_path"] == server["model_path"]:
             return previous["models"]
     reply = fetch_reply(port, "/v1/models", api_key)
     items = get_field(reply["data"], "data")
@@ -250,11 +252,11 @@ def build_llama_server(port: int, api_key: str, props: dict, previous: dict | No
     server = create_server(constants.SERVER_LLAMA, port)
     server["model_path"] = convert_to_text(props.get("model_path"))
     settings = props.get("default_generation_settings")
-    n_ctx = convert_to_int(get_field(settings, "n_ctx"))
+    n_ctx = formatting.convert_to_int(get_field(settings, "n_ctx"))
     if n_ctx is None:
-        n_ctx = convert_to_int(props.get("n_ctx"))
+        n_ctx = formatting.convert_to_int(props.get("n_ctx"))
     server["n_ctx"] = n_ctx
-    server["slots_total"] = convert_to_int(props.get("total_slots"))
+    server["slots_total"] = formatting.convert_to_int(props.get("total_slots"))
     server["models"] = list_llama_models(port, api_key, server, previous)
     read_llama_activity(port, api_key, server)
     return server
@@ -269,9 +271,9 @@ def build_ollama_server(port: int, items: list) -> dict:
         entry = create_server_model(convert_to_text(item.get("name")) or "?")
         entry["type"] = "llm"
         entry["quant"] = convert_to_text(get_field(item.get("details"), "quantization_level"))
-        entry["ctx"] = convert_to_int(item.get("context_length"))
-        entry["size"] = convert_to_int(item.get("size"))
-        entry["size_vram"] = convert_to_int(item.get("size_vram"))
+        entry["ctx"] = formatting.convert_to_int(item.get("context_length"))
+        entry["size"] = formatting.convert_to_int(item.get("size"))
+        entry["size_vram"] = formatting.convert_to_int(item.get("size_vram"))
         server["models"].append(entry)
     return server
 
@@ -286,8 +288,8 @@ def build_lmstudio_instance(model: dict, instance) -> dict:
         model_type = f"decision ({decision_type})"
     entry["type"] = model_type
     entry["quant"] = convert_to_text(get_field(model.get("quantization"), "name"))
-    entry["ctx"] = convert_to_int(get_field(get_field(instance, "config"), "context_length"))
-    entry["size"] = convert_to_int(model.get("size_bytes"))
+    entry["ctx"] = formatting.convert_to_int(get_field(get_field(instance, "config"), "context_length"))
+    entry["size"] = formatting.convert_to_int(model.get("size_bytes"))
     return entry
 
 
@@ -312,9 +314,9 @@ def build_lmstudio_legacy_server(port: int, items: list) -> dict:
         entry = create_server_model(convert_to_text(item.get("id")) or "?")
         entry["type"] = convert_to_text(item.get("type"))
         entry["quant"] = convert_to_text(item.get("quantization"))
-        ctx = convert_to_int(item.get("loaded_context_length"))
+        ctx = formatting.convert_to_int(item.get("loaded_context_length"))
         if ctx is None:
-            ctx = convert_to_int(item.get("max_context_length"))
+            ctx = formatting.convert_to_int(item.get("max_context_length"))
         entry["ctx"] = ctx
         server["models"].append(entry)
     return server
@@ -370,6 +372,10 @@ def probe_generic(port: int, api_key: str, previous: dict | None) -> dict:
         return create_outcome(None, False)
     if props["status"] == STATUS_UNAUTHORIZED:
         return create_outcome(None, True)
+    if props["status"] == STATUS_UNAVAILABLE:
+        outcome = create_outcome(None, False)
+        outcome["loading"] = True
+        return outcome
     props_body = props["data"]
     if is_llama_props(props_body):
         return create_outcome(build_llama_server(port, api_key, props_body, previous), False)
@@ -406,7 +412,11 @@ def probe_port(prober: dict, cache_key: tuple, api_key: str) -> dict:
     cache = prober["cache"]
     cached = cache.get(cache_key)
     if cached is not None:
-        lifetime = POSITIVE_TTL if cached["server"] is not None else NEGATIVE_TTL
+        lifetime = NEGATIVE_TTL
+        if cached["server"] is not None:
+            lifetime = POSITIVE_TTL
+        elif cached["loading"]:
+            lifetime = LOADING_TTL
         if time.monotonic() - cached["time"] < lifetime:
             return cached
     port = cache_key[0]

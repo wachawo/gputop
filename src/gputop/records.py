@@ -9,7 +9,6 @@ from gputop import formatting
 HEX_DIGITS = "0123456789abcdef"
 RUNTIME_LABEL_LIMIT = 3
 RUNTIME_LABEL_SEPARATOR = "+"
-VRAM_UNKNOWN_LABEL = "n/a"
 AMD_SOURCE_PREFIX = "AMD "
 DEVICE_LABEL_AMD = "AMD gfx"
 DEVICE_LABEL_INTEL = "Intel GT"
@@ -225,7 +224,7 @@ def create_detail(pid: int, name: str = constants.UNKNOWN_NAME) -> dict:
 def copy_model_file(model: dict) -> dict:
     """Return a shallow copy of a model file record with its own sources list."""
     duplicate = dict(model)
-    duplicate["sources"] = list(model.get("sources") or [])
+    duplicate["sources"] = list(model["sources"])
     return duplicate
 
 
@@ -331,6 +330,15 @@ def get_shown_vram(gpu: dict) -> float | None:
     return None
 
 
+def is_spill(row: dict, snapshot: dict) -> bool:
+    """True when the system-RAM share of a model process means it spilled out of VRAM."""
+    return (
+        row["gpu"]["shared"] >= constants.SPILL_WARN_BYTES
+        and row["kind"] in constants.SPILL_KINDS
+        and snapshot["shared_is_spill"]
+    )
+
+
 def get_gpu_pct(gpu: dict) -> float:
     """Return the load of the busiest engine of a process, 0.0 without engines."""
     engines = gpu["engines"]
@@ -362,7 +370,7 @@ def format_vram_label(gpu: dict) -> str:
     """Return the VRAM cell text of a process, with the inferred-owner mark when one applies."""
     shown = get_shown_vram(gpu)
     if shown is None:
-        return VRAM_UNKNOWN_LABEL
+        return formatting.MISSING_CELL
     mark = constants.INFERRED_MARKS.get(gpu["inferred_by"], "")
     return formatting.format_size(shown) + mark
 
@@ -388,6 +396,17 @@ def get_runtime_label(detail: dict) -> str:
     """Return the first runtime labels of a process joined into one cell text."""
     shown = detail["runtimes"][:RUNTIME_LABEL_LIMIT]
     return RUNTIME_LABEL_SEPARATOR.join(shown)
+
+
+def get_device_name(snapshot: dict) -> str:
+    """Adapter name, else the telemetry name, else a generic label."""
+    adapter = snapshot["adapter"]
+    if adapter is not None and adapter["name"]:
+        return adapter["name"]
+    device = snapshot["device"]
+    if device is not None and device["name"] and device["name"] != constants.UNKNOWN_NAME:
+        return device["name"]
+    return "GPU"
 
 
 def is_amd_device(device: dict) -> bool:
@@ -417,10 +436,10 @@ def get_snapshot_attributed(snapshot: dict) -> int | None:
     """Return the device memory of all rows summed, or None when any row is not measured."""
     total = 0.0
     for row in snapshot["procs"]:
-        gpu = row["gpu"]
-        if constants.COUNTER_DEDICATED not in gpu["available"]:
+        shown_vram = get_shown_vram(row["gpu"])
+        if shown_vram is None:
             return None
-        total += gpu["dedicated"]
+        total += shown_vram
     return int(total)
 
 

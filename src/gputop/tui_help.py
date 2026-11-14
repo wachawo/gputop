@@ -94,7 +94,7 @@ arrows, PageUp and PageDown move the selection
 
 ## Charts
 
-Eight charts show the last 60 samples of each GPU: load, main clock, VRAM, memory activity,
+Eight charts show the recent history of each GPU: load, main clock, VRAM, memory activity,
 temperature, power, encoder and decoder. The grid uses three columns in a wide terminal,
 two in a medium one and one in a narrow one. Pick a single chart from the dropdown, or
 press `c` to cycle through them. A blank cell means no reading and is not a zero. Percent

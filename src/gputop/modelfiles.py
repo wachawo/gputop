@@ -2,11 +2,9 @@
 # -*- coding: utf-8 -*-
 """Model-file rule, launch-flag models, path-argument hints, installed candidates, evidence text."""
 import collections
-import logging
 import os
 import stat
 import time
-import traceback
 
 # Local imports
 from gputop import cmdline
@@ -69,8 +67,6 @@ EVIDENCE_INSTALLED_TEXT = "installed, not proven loaded"
 
 # Process-wide cache of the installed-model walk: executable path to {"time", "models"}
 INSTALLED_CACHE = {}
-
-logger = logging.getLogger(__name__)
 
 
 def has_model_evidence(model: dict) -> bool:
@@ -221,7 +217,7 @@ def list_flag_values(arguments: list[str]) -> list[str]:
         if cmdline.is_secret_flag(flag):
             skip_secret = value is None
             continue
-        if flag not in model_flags:
+        if cmdline.normalize_flag(flag) not in model_flags:
             continue
         if value is None:
             following = arguments[position + 1:position + 2]
@@ -233,16 +229,13 @@ def list_flag_values(arguments: list[str]) -> list[str]:
 def find_cmdline_models(arguments: list[str], cwd: str) -> list[str]:
     """Return the absolute paths of existing regular files named by model flags."""
     paths = []
-    try:
-        for value in list_flag_values(arguments):
-            joined = resolve_argument_path(value, cwd)
-            if not joined or stat_regular_file(joined) is None:
-                continue
-            absolute = os.path.abspath(joined)
-            if absolute not in paths:
-                paths.append(absolute)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    for value in list_flag_values(arguments):
+        joined = resolve_argument_path(value, cwd)
+        if not joined or stat_regular_file(joined) is None:
+            continue
+        absolute = os.path.abspath(joined)
+        if absolute not in paths:
+            paths.append(absolute)
     return paths
 
 
@@ -318,13 +311,10 @@ def create_path_arg_model(candidate: str, cwd: str) -> dict | None:
 def find_path_arg_models(arguments: list[str], cwd: str) -> list[dict]:
     """Return the path-argument hints of an argument vector as model file records."""
     models = []
-    try:
-        for candidate in list_path_candidates(arguments):
-            model = create_path_arg_model(candidate, cwd)
-            if model is not None:
-                models.append(model)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    for candidate in list_path_candidates(arguments):
+        model = create_path_arg_model(candidate, cwd)
+        if model is not None:
+            models.append(model)
     return models
 
 
@@ -437,13 +427,6 @@ def build_installed_models(exe: str) -> list[dict]:
     return models[:INSTALLED_KEEP]
 
 
-def copy_model_file(model: dict) -> dict:
-    """Return a copy of a model file record with its own sources list."""
-    duplicate = dict(model)
-    duplicate["sources"] = list(model["sources"])
-    return duplicate
-
-
 def drop_stale_installed(now: float) -> None:
     """Forget cached installed-model walks that are past their lifetime."""
     stale = [exe for exe, cached in INSTALLED_CACHE.items()
@@ -460,14 +443,9 @@ def find_installed_models(exe: str) -> list[dict]:
     cached = INSTALLED_CACHE.get(exe)
     if cached is None or now - cached["time"] >= INSTALLED_LIFETIME:
         drop_stale_installed(now)
-        try:
-            models = build_installed_models(exe)
-        except Exception as exc:
-            logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-            models = []
-        cached = {"time": now, "models": models}
+        cached = {"time": now, "models": build_installed_models(exe)}
         INSTALLED_CACHE[exe] = cached
-    return [copy_model_file(model) for model in cached["models"]]
+    return [records.copy_model_file(model) for model in cached["models"]]
 
 
 def main():

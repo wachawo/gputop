@@ -11,6 +11,7 @@ import time
 
 # Local imports
 from gputop import constants
+from gputop import drm_cards
 
 # PMU discovery
 EVENT_SOURCE_DIR = "/sys/bus/event_source/devices"
@@ -57,16 +58,6 @@ def create_pmu_reading() -> dict:
     return {"util": None, "video": None}
 
 
-def read_text(path: str) -> str | None:
-    """Read a small text file, stripped; None when it cannot be read."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            content = handle.read()
-    except OSError:
-        return None
-    return content.strip()
-
-
 def find_pmu_path(card: dict) -> str | None:
     """Return the event source directory that serves the card; None when there is none."""
     if card["driver"] != constants.DRIVER_I915:
@@ -91,7 +82,7 @@ def decode_events(events_dir: str) -> dict | None:
     for name in names:
         if not name.endswith(BUSY_SUFFIX):
             continue
-        content = read_text(os.path.join(events_dir, name))
+        content = drm_cards.read_text(os.path.join(events_dir, name))
         if not content or "=" not in content:
             return None
         assignment = content.split("=", 1)[1]
@@ -106,8 +97,8 @@ def decode_events(events_dir: str) -> dict | None:
 
 def decode_pmu(path: str) -> dict | None:
     """Decode type, CPU and busy events of a PMU directory; None on any failure."""
-    type_text = read_text(os.path.join(path, "type"))
-    cpumask = read_text(os.path.join(path, "cpumask"))
+    type_text = drm_cards.read_text(os.path.join(path, "type"))
+    cpumask = drm_cards.read_text(os.path.join(path, "cpumask"))
     if not type_text or not type_text.isdigit() or not cpumask:
         return None
     cpu_match = CPU_PATTERN.match(cpumask)
@@ -147,7 +138,7 @@ def close_counters(pmu: dict) -> None:
     for fd in pmu["fds"].values():
         try:
             os.close(fd)
-        except Exception:
+        except OSError:
             pass
     pmu["fds"] = {}
     pmu["baseline"] = {}
@@ -165,10 +156,6 @@ def open_counters(pmu: dict) -> None:
                 pmu["reason"] = REASON_DENIED
             else:
                 pmu["reason"] = REASON_MISSING
-            return
-        except Exception:
-            close_counters(pmu)
-            pmu["reason"] = REASON_MISSING
             return
 
 

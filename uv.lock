@@ -16,7 +16,7 @@ dependencies = [
 requires-dist = [
     { name = "nvidia-ml-py", specifier = ">=12.535.133" },
     { name = "psutil", specifier = ">=5.9" },
-    { name = "textual", specifier = ">=3.0" },
+    { name = "textual", specifier = ">=3.2" },
 ]
 
 [[package]]

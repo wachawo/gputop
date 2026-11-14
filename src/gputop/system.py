@@ -2,16 +2,21 @@
 # -*- coding: utf-8 -*-
 """System sampler: machine CPU, RAM and swap, per-process RSS and CPU share (psutil)."""
 
+import logging
 import time
+import traceback
 
 import psutil
 
 # Local imports
 from gputop import constants
+from gputop import formatting
 
 TOP_FIELDS = ("rss", "cpu_pct")
 DEFAULT_TOP_COUNT = 5
 MILLISECONDS = 1000.0
+
+logger = logging.getLogger(__name__)
 
 
 def create_system_proc(
@@ -158,6 +163,21 @@ def get_top_procs(sample: dict, field: str, count: int = DEFAULT_TOP_COUNT) -> l
     known = [reading for reading in sample["procs"] if reading[field] is not None]
     ordered = sorted(known, key=lambda reading: reading[field], reverse=True)
     return ordered[:count]
+
+
+def take_system_reading(holder: dict) -> tuple[dict | None, str]:
+    """One system sample as (sample or None, error text). Never raises.
+
+    `holder["sampler"]` keeps the sampler between calls: it is created on first use and,
+    when that failed, tried again on the next call. A failure is logged and returned as text.
+    """
+    try:
+        if holder["sampler"] is None:
+            holder["sampler"] = open_system_sampler()
+        return sample_system(holder["sampler"]), ""
+    except Exception as exc:
+        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+        return None, formatting.format_error(exc)
 
 
 def main():

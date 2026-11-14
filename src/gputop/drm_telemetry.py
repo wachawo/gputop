@@ -8,6 +8,7 @@ import time
 
 # Local imports
 from gputop import constants
+from gputop import drm_cards
 from gputop import drm_pmu
 from gputop import records
 
@@ -80,27 +81,6 @@ def create_intel_state(card: dict, cards: list[dict]) -> dict:
     return {"card": card, "pmu": drm_pmu.open_pmu(card, cards), "energy": {}}
 
 
-def read_text(path: str) -> str | None:
-    """Read a small text file, stripped; None when it cannot be read."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            content = handle.read()
-    except OSError:
-        return None
-    return content.strip()
-
-
-def read_number(path: str) -> int | None:
-    """Read a decimal integer file; None when unreadable, empty or unparseable."""
-    content = read_text(path)
-    if not content:
-        return None
-    try:
-        return int(content)
-    except ValueError:
-        return None
-
-
 def list_sorted(path: str) -> list[str]:
     """Return the sorted entry names of a directory, [] when it cannot be listed."""
     try:
@@ -122,7 +102,7 @@ def list_sensor_labels(hwmon_dir: str, prefix: str) -> list[tuple[str, str]]:
     for name in list_sorted(hwmon_dir):
         if not name.startswith(prefix) or not name.endswith("_label"):
             continue
-        label = read_text(os.path.join(hwmon_dir, name))
+        label = drm_cards.read_text(os.path.join(hwmon_dir, name))
         if label is not None:
             labels.append((name[:-len("_label")], label))
     return labels
@@ -132,7 +112,7 @@ def read_labelled_input(hwmon_dir: str, prefix: str, wanted: str) -> tuple[bool,
     """Find the sensor with the wanted label: (label found, value of its input file)."""
     for sensor, label in list_sensor_labels(hwmon_dir, prefix):
         if label == wanted:
-            return True, read_number(os.path.join(hwmon_dir, f"{sensor}_input"))
+            return True, drm_cards.read_number(os.path.join(hwmon_dir, f"{sensor}_input"))
     return False, None
 
 
@@ -142,7 +122,7 @@ def read_temperature(hwmon_dir: str) -> float | None:
         return None
     found, reading = read_labelled_input(hwmon_dir, "temp", TEMP_LABEL_EDGE)
     if not found:
-        reading = read_number(os.path.join(hwmon_dir, "temp1_input"))
+        reading = drm_cards.read_number(os.path.join(hwmon_dir, "temp1_input"))
     return None if reading is None else float(reading // MILLI)
 
 
@@ -158,8 +138,8 @@ def read_fan(hwmon_dir: str) -> int | None:
     """Fan speed as a percentage of its maximum; None without both readings."""
     if not hwmon_dir:
         return None
-    speed = read_number(os.path.join(hwmon_dir, "fan1_input"))
-    speed_max = read_number(os.path.join(hwmon_dir, "fan1_max"))
+    speed = drm_cards.read_number(os.path.join(hwmon_dir, "fan1_input"))
+    speed_max = drm_cards.read_number(os.path.join(hwmon_dir, "fan1_max"))
     if speed is None or speed_max is None or speed_max <= 0:
         return None
     return round(100 * speed / speed_max)
@@ -169,22 +149,22 @@ def fill_amd_power(device: dict, hwmon_dir: str) -> None:
     """Fill power draw, its label and the power limit of an amdgpu card."""
     if not hwmon_dir:
         return
-    power = read_number(os.path.join(hwmon_dir, "power1_average"))
+    power = drm_cards.read_number(os.path.join(hwmon_dir, "power1_average"))
     if power is None or power == 0:
-        instant = read_number(os.path.join(hwmon_dir, "power1_input"))
+        instant = drm_cards.read_number(os.path.join(hwmon_dir, "power1_input"))
         if instant is not None:
             power = instant
     if power is not None:
         device["power_w"] = power / MICRO
-        device["power_kind"] = read_text(os.path.join(hwmon_dir, "power1_label")) or ""
-    limit = read_number(os.path.join(hwmon_dir, "power1_cap"))
+        device["power_kind"] = drm_cards.read_text(os.path.join(hwmon_dir, "power1_label")) or ""
+    limit = drm_cards.read_number(os.path.join(hwmon_dir, "power1_cap"))
     if limit is not None:
         device["power_limit_w"] = limit / MICRO
 
 
 def read_max_clock(device_dir: str) -> int | None:
     """Highest graphics clock level of pp_dpm_sclk in MHz."""
-    content = read_text(os.path.join(device_dir, "pp_dpm_sclk"))
+    content = drm_cards.read_text(os.path.join(device_dir, "pp_dpm_sclk"))
     if not content:
         return None
     levels = [int(level) for level in DPM_CLOCK_PATTERN.findall(content)]
@@ -193,7 +173,7 @@ def read_max_clock(device_dir: str) -> int | None:
 
 def read_link_generation(device_dir: str) -> int | None:
     """PCIe generation of the current link speed; None when it is not a known speed."""
-    content = read_text(os.path.join(device_dir, "current_link_speed"))
+    content = drm_cards.read_text(os.path.join(device_dir, "current_link_speed"))
     if not content:
         return None
     try:
@@ -217,12 +197,12 @@ def read_amd_device(card: dict, gpu_index: int) -> dict:
     device_dir = card["device_dir"]
     hwmon_dir = find_hwmon_dir(device_dir)
     device = create_card_device(card, gpu_index, constants.SOURCE_AMD)
-    busy = read_number(os.path.join(device_dir, "gpu_busy_percent"))
-    mem_busy = read_number(os.path.join(device_dir, "mem_busy_percent"))
+    busy = drm_cards.read_number(os.path.join(device_dir, "gpu_busy_percent"))
+    mem_busy = drm_cards.read_number(os.path.join(device_dir, "mem_busy_percent"))
     device["util_gpu"] = None if busy is None else float(busy)
     device["util_mem"] = None if mem_busy is None else float(mem_busy)
-    device["mem_total"] = read_number(os.path.join(device_dir, "mem_info_vram_total"))
-    device["mem_used"] = read_number(os.path.join(device_dir, "mem_info_vram_used"))
+    device["mem_total"] = drm_cards.read_number(os.path.join(device_dir, "mem_info_vram_total"))
+    device["mem_used"] = drm_cards.read_number(os.path.join(device_dir, "mem_info_vram_used"))
     device["temp"] = read_temperature(hwmon_dir)
     fill_amd_power(device, hwmon_dir)
     device["fan"] = read_fan(hwmon_dir)
@@ -230,24 +210,24 @@ def read_amd_device(card: dict, gpu_index: int) -> dict:
     device["mem_clock"] = read_clock(hwmon_dir, CLOCK_LABEL_MEM)
     device["sm_clock_max"] = read_max_clock(device_dir)
     device["pcie_gen"] = read_link_generation(device_dir)
-    device["pcie_width"] = read_number(os.path.join(device_dir, "current_link_width"))
+    device["pcie_width"] = drm_cards.read_number(os.path.join(device_dir, "current_link_width"))
     return device
 
 
 def read_amd_shared_used(card: dict) -> int | None:
     """Bytes of system RAM the amdgpu card currently uses (GTT), None when unreadable."""
-    return read_number(os.path.join(card["device_dir"], "mem_info_gtt_used"))
+    return drm_cards.read_number(os.path.join(card["device_dir"], "mem_info_gtt_used"))
 
 
 def read_package_temperature() -> float | None:
     """CPU package temperature in degrees C from the coretemp hwmon device."""
     for name in list_sorted(HWMON_CLASS_DIR):
         hwmon_dir = os.path.join(HWMON_CLASS_DIR, name)
-        if read_text(os.path.join(hwmon_dir, "name")) != CORETEMP_NAME:
+        if drm_cards.read_text(os.path.join(hwmon_dir, "name")) != CORETEMP_NAME:
             continue
         readings = []
         for sensor, label in list_sensor_labels(hwmon_dir, "temp"):
-            reading = read_number(os.path.join(hwmon_dir, f"{sensor}_input"))
+            reading = drm_cards.read_number(os.path.join(hwmon_dir, f"{sensor}_input"))
             if reading is not None and label.startswith(PACKAGE_LABEL):
                 readings.append((label, reading))
         for label, reading in readings:
@@ -281,7 +261,7 @@ def find_rapl_zone() -> str:
         for child in list_sorted(package_dir):
             zone_dir = os.path.join(package_dir, child)
             energy_path = os.path.join(zone_dir, "energy_uj")
-            if read_text(os.path.join(zone_dir, "name")) != RAPL_ZONE_NAME:
+            if drm_cards.read_text(os.path.join(zone_dir, "name")) != RAPL_ZONE_NAME:
                 continue
             if os.path.exists(energy_path):
                 return energy_path
@@ -312,7 +292,7 @@ def read_rapl_energy() -> int | None:
 def fill_intel_power(device: dict, state: dict, hwmon_dir: str) -> None:
     """Fill power from the hwmon energy counter, else from RAPL on an integrated card."""
     energy_path = os.path.join(hwmon_dir, "energy1_input") if hwmon_dir else ""
-    energy = read_number(energy_path) if energy_path else None
+    energy = drm_cards.read_number(energy_path) if energy_path else None
     if energy is not None:
         device["power_kind"] = POWER_KIND_BOARD
         device["power_w"] = compute_power(state, energy_path, energy)
@@ -327,11 +307,11 @@ def fill_intel_power(device: dict, state: dict, hwmon_dir: str) -> None:
 
 def fill_intel_frequency(device: dict, gt_dir: str) -> None:
     """Fill actual, requested and maximum GT frequency in MHz."""
-    actual = read_number(os.path.join(gt_dir, "rps_act_freq_mhz"))
-    requested = read_number(os.path.join(gt_dir, "rps_cur_freq_mhz"))
+    actual = drm_cards.read_number(os.path.join(gt_dir, "rps_act_freq_mhz"))
+    requested = drm_cards.read_number(os.path.join(gt_dir, "rps_cur_freq_mhz"))
     device["sm_clock"] = requested if actual is None else actual
     device["sm_clock_requested"] = requested
-    device["sm_clock_max"] = read_number(os.path.join(gt_dir, "rps_RP0_freq_mhz"))
+    device["sm_clock_max"] = drm_cards.read_number(os.path.join(gt_dir, "rps_RP0_freq_mhz"))
 
 
 def read_throttle(gt_dir: str) -> list[str] | None:
@@ -339,7 +319,7 @@ def read_throttle(gt_dir: str) -> list[str] | None:
     readable = 0
     active = []
     for file_name, label in THROTTLE_FILES:
-        flag = read_number(os.path.join(gt_dir, file_name))
+        flag = drm_cards.read_number(os.path.join(gt_dir, file_name))
         if flag is None:
             continue
         readable += 1
@@ -372,7 +352,7 @@ def read_intel_device(card: dict, gpu_index: int, state: dict) -> dict:
 def describe_pmu_reason(reason: str) -> str:
     """Explain why the PMU gives no load figures; "" when it works."""
     if reason == drm_pmu.REASON_DENIED:
-        paranoid = read_text(PARANOID_PATH)
+        paranoid = drm_cards.read_text(PARANOID_PATH)
         return STATUS_PMU_DENIED.format(value=paranoid if paranoid else "?")
     if reason == drm_pmu.REASON_MISSING:
         return STATUS_PMU_MISSING

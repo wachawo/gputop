@@ -154,14 +154,10 @@ def sample_drm(state: dict) -> dict:
 
 def close_drm(state: dict) -> None:
     """Close the perf descriptors of the state. Idempotent, never raises."""
-    intel_state = state.get("intel")
+    intel_state = state["intel"]
     state["intel"] = None
-    if intel_state is None:
-        return
-    try:
+    if intel_state is not None:
         drm_pmu.close_pmu(intel_state["pmu"])
-    except Exception:
-        pass
 
 
 def main():

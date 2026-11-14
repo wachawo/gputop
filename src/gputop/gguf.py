@@ -8,6 +8,7 @@ import struct
 
 # Local imports
 from gputop import constants
+from gputop import formatting
 
 # File layout
 GGUF_MAGIC = b"GGUF"
@@ -337,7 +338,7 @@ def parse_file(path: str, file_size: int) -> dict:
         with open(path, "rb", buffering=READ_BUFFER_BYTES) as handle:
             reader = create_reader(handle, file_size)
             parse_header(reader, info)
-    except Exception as exc:
+    except (OSError, ValueError, struct.error) as exc:
         info["error"] = f"{type(exc).__name__}: {exc}"
     return info
 
@@ -379,16 +380,6 @@ def detect_gguf_kind(path: str) -> str:
     return get_gguf_kind(info)
 
 
-def convert_to_int(value) -> int | None:
-    """Integer form of a metadata number, None for anything else."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    try:
-        return int(value)
-    except (ValueError, OverflowError):
-        return None
-
-
 def get_arch_value(info: dict, suffix: str):
     """Value of the metadata key <architecture>.<suffix>, None when missing."""
     arch = info["metadata"].get("general.architecture")
@@ -415,7 +406,7 @@ def get_gguf_arch(info: dict) -> str:
 
 def get_gguf_quant(info: dict) -> str:
     """Quantisation label from general.file_type."""
-    file_type = convert_to_int(info["metadata"].get("general.file_type"))
+    file_type = formatting.convert_to_int(info["metadata"].get("general.file_type"))
     if file_type is None:
         return "?"
     return FILE_TYPE_NAMES.get(file_type, f"type{file_type}")
@@ -423,7 +414,7 @@ def get_gguf_quant(info: dict) -> str:
 
 def get_gguf_layers(info: dict) -> int:
     """Block count from the metadata, 0 when missing."""
-    layers = convert_to_int(get_arch_value(info, "block_count"))
+    layers = formatting.convert_to_int(get_arch_value(info, "block_count"))
     if layers is None or layers < 0:
         return 0
     return layers
@@ -431,12 +422,12 @@ def get_gguf_layers(info: dict) -> int:
 
 def get_gguf_ctx_train(info: dict) -> int | None:
     """Training context length, None when missing."""
-    return convert_to_int(get_arch_value(info, "context_length"))
+    return formatting.convert_to_int(get_arch_value(info, "context_length"))
 
 
 def get_gguf_sliding_window(info: dict) -> int | None:
     """Sliding attention window in tokens, None when missing."""
-    return convert_to_int(get_arch_value(info, "attention.sliding_window"))
+    return formatting.convert_to_int(get_arch_value(info, "attention.sliding_window"))
 
 
 def is_gguf_causal(info: dict) -> bool:
@@ -518,12 +509,12 @@ def list_kv_heads(value, layers: int) -> list[int] | None:
     if isinstance(value, list):
         heads = []
         for item in value[:layers]:
-            count = convert_to_int(item)
+            count = formatting.convert_to_int(item)
             if count is None:
                 return None
             heads.append(count)
         return heads
-    count = convert_to_int(value)
+    count = formatting.convert_to_int(value)
     if count is None:
         return None
     return [count] * layers
@@ -532,11 +523,11 @@ def list_kv_heads(value, layers: int) -> list[int] | None:
 def get_head_dim(info: dict, head_count) -> int | None:
     """Embedding length divided by the (largest) head count, None when either is unknown."""
     if isinstance(head_count, list):
-        counts = [convert_to_int(item) for item in head_count]
+        counts = [formatting.convert_to_int(item) for item in head_count]
         known = [count for count in counts if count is not None]
         head_count = max(known) if known else None
-    heads = convert_to_int(head_count)
-    embedding = convert_to_int(get_arch_value(info, "embedding_length"))
+    heads = formatting.convert_to_int(head_count)
+    embedding = formatting.convert_to_int(get_arch_value(info, "embedding_length"))
     if not heads or heads < 0 or embedding is None:
         return None
     return embedding // heads
@@ -552,8 +543,8 @@ def estimate_kv_elements_per_token(info: dict) -> int | None:
     if layers <= 0 or kv_head_count is None:
         return None
     head_dim = get_head_dim(info, head_count)
-    key_length = convert_to_int(get_arch_value(info, "attention.key_length")) or head_dim
-    value_length = convert_to_int(get_arch_value(info, "attention.value_length")) or head_dim
+    key_length = formatting.convert_to_int(get_arch_value(info, "attention.key_length")) or head_dim
+    value_length = formatting.convert_to_int(get_arch_value(info, "attention.value_length")) or head_dim
     kv_heads = list_kv_heads(kv_head_count, layers)
     if not key_length or not value_length or kv_heads is None:
         return None

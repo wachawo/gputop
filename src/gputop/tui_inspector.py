@@ -26,7 +26,6 @@ MAX_SERVER_MODELS = 4
 ENGINE_MIN_PCT = 0.5
 
 # Styles
-NOTE_STYLE = "grey62"
 TEXT_STYLE = "grey70"
 PORT_STYLE = "grey50"
 CMDLINE_STYLE = "grey42"
@@ -101,21 +100,22 @@ def format_inspector_title(row: dict | None, multi_gpu: bool) -> str:
 def format_engines(gpu: dict) -> str:
     """Busy engines of a process, idle when none is busy, n/a without the counter."""
     if constants.COUNTER_ENGINE not in gpu["available"]:
-        return "n/a"
+        return formatting.MISSING_CELL
     busy = [f"{name} {load:.0f}%" for name, load in gpu["engines"].items() if load >= ENGINE_MIN_PCT]
     return " ".join(busy) if busy else "idle"
 
 
-def append_shared_part(line: Text, gpu: dict, snapshot: dict) -> None:
+def append_shared_part(line: Text, row: dict, snapshot: dict) -> None:
     """Add the system-RAM part of the header; drawn for rows of a DRM snapshot only."""
     if snapshot["backend"] != constants.BACKEND_DRM:
         return
     line.append("   shared(RAM) ")
+    gpu = row["gpu"]
     if constants.COUNTER_SHARED not in gpu["available"]:
-        line.append("n/a")
+        line.append(formatting.MISSING_CELL)
         return
-    is_spill = gpu["shared"] > constants.SPILL_WARN_BYTES and snapshot["shared_is_spill"]
-    line.append(formatting.format_size(gpu["shared"]), style="bold red" if is_spill else "")
+    style = "bold red" if records.is_spill(row, snapshot) else ""
+    line.append(formatting.format_size(gpu["shared"]), style=style)
 
 
 def render_header_line(row: dict, snapshot: dict) -> Text:
@@ -124,12 +124,12 @@ def render_header_line(row: dict, snapshot: dict) -> Text:
     line = Text()
     line.append("VRAM ", style="bold")
     line.append(records.format_vram_label(gpu), style="bold")
-    append_shared_part(line, gpu, snapshot)
+    append_shared_part(line, row, snapshot)
     line.append("   engines ")
     line.append(format_engines(gpu))
     runtime_labels = row["detail"]["runtimes"]
     if runtime_labels:
-        line.append("   runtime ", style=NOTE_STYLE)
+        line.append("   runtime ", style=constants.MUTED_STYLE)
         line.append(" ".join(runtime_labels), style="cyan")
     return line
 
@@ -138,8 +138,8 @@ def list_resident_notes(gpu: dict) -> list[str]:
     """The resident-memory line of a DRM row; empty when neither figure is known."""
     if gpu["resident_vram"] is None and gpu["resident_gtt"] is None:
         return []
-    resident_vram = formatting.format_size_or_na(gpu["resident_vram"], "n/a")
-    resident_gtt = formatting.format_size_or_na(gpu["resident_gtt"], "n/a")
+    resident_vram = formatting.format_size_or_na(gpu["resident_vram"], formatting.MISSING_CELL)
+    resident_gtt = formatting.format_size_or_na(gpu["resident_gtt"], formatting.MISSING_CELL)
     return [f"Resident VRAM {resident_vram}, GTT {resident_gtt}. {constants.RESIDENT_NOTE}"]
 
 
@@ -302,7 +302,7 @@ def render_llm_body(row: dict, width: int) -> list:
     if view["models"]:
         body.append(render_model_table(view))
     for model in view["other_files"]:
-        body.append(Text(format_file_line(model), style=NOTE_STYLE))
+        body.append(Text(format_file_line(model), style=constants.MUTED_STYLE))
     body.extend(render_server_lines(view))
     body.extend(render_note_line(note) for note in view["notes"])
     return body
@@ -320,7 +320,7 @@ def render_plain_body(row: dict) -> list:
     if detail["candidates"]:
         body.append(Text(CANDIDATES_NOTE, style=TEXT_STYLE))
         for model in detail["candidates"]:
-            body.append(Text(format_candidate_line(model), style=NOTE_STYLE))
+            body.append(Text(format_candidate_line(model), style=constants.MUTED_STYLE))
     return body
 
 
@@ -342,10 +342,10 @@ def render_tail(detail: dict) -> list:
 def render_inspector(row: dict | None, snapshot: dict | None, width: int) -> Text | Group:
     """The inspector body for the selected row, or the hint when nothing is selected."""
     if row is None or snapshot is None:
-        return Text(EMPTY_HINT, style=NOTE_STYLE)
+        return Text(EMPTY_HINT, style=constants.MUTED_STYLE)
     parts = [render_header_line(row, snapshot)]
     for note in list_explanations(row, snapshot):
-        parts.append(Text(note, style=NOTE_STYLE))
+        parts.append(Text(note, style=constants.MUTED_STYLE))
     if row["llm"] is not None:
         parts.extend(render_llm_body(row, width))
     else:

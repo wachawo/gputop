@@ -22,6 +22,7 @@ from gputop import adapters
 from gputop import collector
 from gputop import constants
 from gputop import formatting
+from gputop import nvidia
 from gputop import records
 from gputop import system
 from gputop import tui_help
@@ -189,25 +190,16 @@ def log_failure(exc: BaseException) -> None:
     logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
 
 
-def take_system_sample(sampler_box: dict) -> tuple[dict | None, str]:
-    """One system sample and its error text; the sampler is created on first use and retried."""
-    try:
-        if sampler_box["sampler"] is None:
-            sampler_box["sampler"] = system.open_system_sampler()
-        return system.sample_system(sampler_box["sampler"]), ""
-    except Exception as exc:
-        log_failure(exc)
-        return None, formatting.format_error(exc)
-
-
 def open_collectors(view_state: dict, collectors: list[dict]) -> None:
     """Open one collector per shown GPU, in order, sharing the deep-scan budget."""
     shown_indexes = view_state["shown_indexes"]
+    nvidia_shared = nvidia.create_shared_reads()
     for index in shown_indexes:
         opened = collector.open_collector(
             index,
             budget_scale=1 / len(shown_indexes),
             ordered_adapters=view_state["ordered_adapters"],
+            nvidia_shared=nvidia_shared,
         )
         collectors.append(opened)
 
@@ -239,7 +231,7 @@ def build_payload(view_state: dict, collectors: list[dict], sampler_box: dict) -
     system_sample = None
     system_error = ""
     if view_state["show_system"]:
-        system_sample, system_error = take_system_sample(sampler_box)
+        system_sample, system_error = system.take_system_reading(sampler_box)
     return {
         "snapshots": snapshots,
         "errors": errors,
@@ -253,7 +245,7 @@ def run_sampling_loop(view_state: dict, deliver) -> None:
     stop_event = view_state["stop_event"]
     sampler_box = {"sampler": None}
     if view_state["show_system"]:
-        take_system_sample(sampler_box)
+        system.take_system_reading(sampler_box)
     collectors = []
     try:
         open_collectors(view_state, collectors)
@@ -270,11 +262,18 @@ def run_sampling_loop(view_state: dict, deliver) -> None:
 
 
 def deliver_payload(app, payload: dict) -> None:
-    """Hand one refresh to the UI thread; a hand-off to a closing app is dropped."""
+    """Hand one refresh to the UI thread; a hand-off to a closing app is dropped.
+
+    call_from_thread also re-raises what the refresh raised on the UI thread, so the same
+    exception types from a running app are a rendering failure and are logged as one.
+    """
     try:
         app.call_from_thread(app.apply_refresh, payload)
     except (RuntimeError, concurrent.futures.CancelledError) as exc:
-        logger.debug(f"Refresh dropped: {type(exc).__name__}: {str(exc)}")
+        if app.view_state["stop_event"].is_set():
+            logger.debug(f"Refresh dropped: {type(exc).__name__}: {str(exc)}")
+        else:
+            log_failure(exc)
 
 
 def store_system_sample(view_state: dict, payload: dict) -> None:

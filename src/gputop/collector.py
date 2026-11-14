@@ -2,9 +2,7 @@
 # -*- coding: utf-8 -*-
 """Collector: assemble one snapshot of one adapter per call from its backend and inspectors."""
 
-import logging
 import time
-import traceback
 
 # Local imports
 from gputop import adapters
@@ -26,14 +24,13 @@ OWNER_NONE = ""
 COUNTERS_DEVICE_ONLY = (constants.COUNTER_DEDICATED,)
 COUNTERS_WITH_SPILL = (constants.COUNTER_DEDICATED, constants.COUNTER_SHARED)
 
-logger = logging.getLogger(__name__)
-
 
 def create_collector_state(
     gpu_index: int,
     adapter: dict | None,
     ordered_adapters: list[dict],
     budget_scale: float | None,
+    nvidia_shared: dict | None,
 ) -> dict:
     """Create the collector state before anything is opened.
 
@@ -43,6 +40,7 @@ def create_collector_state(
     backend: str, BACKEND_NVML or BACKEND_DRM.
     owner: str, OWNER_NVIDIA, OWNER_DRM or OWNER_NONE (no backend state to sample or close).
     backend_state: dict or None, the state of the owning backend module.
+    nvidia_shared: dict or None, the NVML reads shared with the other collectors.
     scan_budget: float or None, seconds one sample may spend on deep scans; None is unlimited.
     drm_budget: float or None, seconds one DRM process scan may take; None is unlimited.
     inspector: dict or None, the process inspector state.
@@ -61,6 +59,7 @@ def create_collector_state(
         "backend": constants.BACKEND_NVML,
         "owner": OWNER_NONE,
         "backend_state": None,
+        "nvidia_shared": nvidia_shared,
         "scan_budget": scan_budget,
         "drm_budget": drm_budget,
         "inspector": None,
@@ -73,7 +72,9 @@ def open_backend(state: dict) -> None:
     """Open the backend that serves the selected adapter and record it in the state."""
     adapter = state["adapter"]
     if adapter is None or adapter["vendor_id"] == constants.VENDOR_NVIDIA:
-        state["backend_state"] = nvidia.open_nvidia(adapter, state["gpu_index"])
+        state["backend_state"] = nvidia.open_nvidia(
+            adapter, state["gpu_index"], state["nvidia_shared"]
+        )
         state["owner"] = OWNER_NVIDIA
         return
     drm_state = drm.open_drm(adapter, state["gpu_index"], state["drm_budget"])
@@ -88,16 +89,21 @@ def open_collector(
     gpu_index: int = 0,
     budget_scale: float | None = 1.0,
     ordered_adapters: list[dict] | None = None,
+    nvidia_shared: dict | None = None,
 ) -> dict:
     """Open a collector for the adapter at gpu_index of the ordered adapter list.
 
     budget_scale None means unlimited scans; otherwise it scales both scan budgets.
+    nvidia_shared is one nvidia.create_shared_reads record handed to every collector of
+    a program that opens several, so machine-wide NVML reads happen once per tick.
     Raises ValueError for a bad index; any other failure closes what was opened and propagates.
     """
     if ordered_adapters is None:
         ordered_adapters = adapters.list_ordered_adapters()
     adapter = adapters.select_adapter(ordered_adapters, gpu_index)
-    state = create_collector_state(gpu_index, adapter, ordered_adapters, budget_scale)
+    state = create_collector_state(
+        gpu_index, adapter, ordered_adapters, budget_scale, nvidia_shared
+    )
     opened = False
     try:
         open_backend(state)
@@ -119,13 +125,10 @@ def close_collector(state: dict) -> None:
     owner = state["owner"]
     state["backend_state"] = None
     state["owner"] = OWNER_NONE
-    try:
-        if owner == OWNER_NVIDIA:
-            nvidia.close_nvidia(backend_state)
-        elif owner == OWNER_DRM:
-            drm.close_drm(backend_state)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    if owner == OWNER_NVIDIA:
+        nvidia.close_nvidia(backend_state)
+    elif owner == OWNER_DRM:
+        drm.close_drm(backend_state)
 
 
 def read_backend(state: dict) -> dict:

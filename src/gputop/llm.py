@@ -16,6 +16,7 @@ from gputop import llm_flags
 from gputop import llm_log
 from gputop import llm_probe
 from gputop import modelfiles
+from gputop import records
 
 # KV cache element types: bytes per element
 DEFAULT_KV_TYPE = "f16"
@@ -266,16 +267,6 @@ def probe_servers(state: dict, detail: dict, parents: list[dict]) -> dict:
     if parent["server"] is None and parent["locked_port"] is not None:
         result["parent_locked"] = True
     return result
-
-
-def copy_model_files(detail: dict) -> list[dict]:
-    """Copies of the model file records, so the cached detail is never touched."""
-    copies = []
-    for model in detail["models"]:
-        copied = dict(model)
-        copied["sources"] = list(model["sources"])
-        copies.append(copied)
-    return copies
 
 
 def add_api_source(model: dict) -> None:
@@ -779,7 +770,7 @@ def assemble_view(
     view["host"] = probe["host"]
     view["server_source"] = probe["server_source"]
     add_vllm_notes(view, probe["role"])
-    files = copy_model_files(detail)
+    files = [records.copy_model_file(model) for model in detail["models"]]
     merge_api_evidence(files, draft)
     split_model_files(files, draft)
     read_load_log(draft, detail, log_path)

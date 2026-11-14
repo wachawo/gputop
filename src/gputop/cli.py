@@ -8,7 +8,6 @@ import math
 import os
 import sys
 import time
-import traceback
 
 # Local imports
 from gputop import adapters
@@ -16,7 +15,6 @@ from gputop import collector
 from gputop import constants
 from gputop import diff
 from gputop import export
-from gputop import formatting
 from gputop import record
 from gputop import report
 from gputop import system
@@ -150,47 +148,17 @@ def write_adapter_list() -> int:
     return write_stdout("".join(lines))
 
 
-def check_gpu_range(parser: argparse.ArgumentParser, gpu_index: int | None) -> list[dict] | None:
-    """Range check of an index above 0; returns the ordered adapter list it enumerated."""
-    if gpu_index is None or gpu_index <= 0:
-        return None
-    ordered_adapters = adapters.list_ordered_adapters()
-    try:
-        adapters.select_adapter(ordered_adapters, gpu_index)
-    except ValueError as exc:
-        parser.error(str(exc))
-    return ordered_adapters
-
-
-def take_system_reading(sampler: dict | None) -> tuple:
-    """One system sample as (sampler, sample or None, error text).
-
-    Without a sampler one is created first. Any failure is logged and returned as text;
-    a sampler that could not be created stays None.
-    """
-    try:
-        if sampler is None:
-            sampler = system.open_system_sampler()
-        return sampler, system.sample_system(sampler), ""
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        return sampler, None, formatting.format_error(exc)
-
-
 def render_one_shot(collector_state: dict, as_json: bool, show_system: bool) -> str:
     """Prime, wait for the warm-up, sample once and return the report or JSON text."""
-    sampler = None
+    holder = {"sampler": None}
     system_sample = None
     system_error = ""
     if show_system:
-        sampler, system_sample, system_error = take_system_reading(None)
-        if system_error:
-            sampler = None
-        system_sample = None
+        system.take_system_reading(holder)
     time.sleep(constants.WARMUP_SECONDS)
     snapshot = collector.sample_collector(collector_state)
-    if sampler is not None:
-        sampler, system_sample, system_error = take_system_reading(sampler)
+    if show_system:
+        system_sample, system_error = system.take_system_reading(holder)
     if as_json:
         document = export.build_snapshot_dict(
             snapshot, system_sample, system_error, show_system
@@ -226,7 +194,7 @@ def run_one_shot(
 def run_snapshot_mode(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Range check of --gpu, then the one-shot sequence; Ctrl+C at any point ends quietly."""
     try:
-        ordered_adapters = check_gpu_range(parser, options.gpu)
+        ordered_adapters = record.check_gpu_range(parser, options.gpu)
         return run_one_shot(parser, options, ordered_adapters)
     except KeyboardInterrupt:
         return INTERRUPTED_STATUS
@@ -256,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         return write_adapter_list()
     if options.once or options.json:
         return run_snapshot_mode(parser, options)
-    check_gpu_range(parser, options.gpu)
+    record.check_gpu_range(parser, options.gpu)
     return start_tui(options)
 
 

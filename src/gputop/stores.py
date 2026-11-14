@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+import traceback
 
 # Local imports
 from gputop import constants
@@ -212,7 +213,7 @@ def resolve_store_name(path: str) -> str | None:
             if name:
                 return name
     except Exception as exc:
-        logger.debug(f"Store name lookup failed: {type(exc).__name__}: {str(exc)}")
+        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
     return None
 
 

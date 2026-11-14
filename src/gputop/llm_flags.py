@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """Launch-flag parser for llama.cpp style runtimes."""
 
+# Local imports
+from gputop import cmdline
+
 # Field kinds
 FIELD_INT = "int"
 FIELD_LAYERS = "layers"
@@ -11,6 +14,7 @@ FIELD_TEXT = "text"
 VALUE_FLAGS = {
     "-c": ("ctx", FIELD_INT),
     "--ctx-size": ("ctx", FIELD_INT),
+    "--n-ctx": ("ctx", FIELD_INT),
     "-ngl": ("ngl", FIELD_LAYERS),
     "--n-gpu-layers": ("ngl", FIELD_LAYERS),
     "--gpu-layers": ("ngl", FIELD_LAYERS),
@@ -26,14 +30,6 @@ VALUE_FLAGS = {
 SWITCH_FLAGS = {"--no-mmap": "no_mmap"}
 ALL_LAYERS_WORDS = ("all", "auto")
 ALL_LAYERS = -1
-
-
-def split_long_flag(argument: str) -> tuple[str, str | None]:
-    """Split --flag=value; single-dash flags and flags without = keep value None."""
-    if argument.startswith("--") and "=" in argument:
-        flag, value = argument.split("=", 1)
-        return flag, value
-    return argument, None
 
 
 def convert_flag_value(value: str, field_kind: str):
@@ -54,12 +50,18 @@ def parse_llm_flags(arguments: list[str]) -> dict:
 
     Returns only the fields found: ctx, ngl, parallel, port (int), ctk, ctv, log_file (str),
     no_mmap (True). The last occurrence of a flag wins; an integer that does not parse is dropped.
+    Long flags are read with underscores as hyphens; the value of a secret flag is skipped.
     """
     flags = {}
     position = 0
     while position < len(arguments):
-        flag, value = split_long_flag(str(arguments[position]))
+        flag, value = cmdline.split_flag(arguments[position])
+        flag = cmdline.normalize_flag(flag)
         position += 1
+        if cmdline.is_secret_flag(flag):
+            if value is None:
+                position += 1
+            continue
         if flag in SWITCH_FLAGS:
             flags[SWITCH_FLAGS[flag]] = True
             continue
@@ -68,7 +70,7 @@ def parse_llm_flags(arguments: list[str]) -> dict:
         if value is None:
             if position >= len(arguments):
                 continue
-            value = str(arguments[position])
+            value = arguments[position]
             position += 1
         field, field_kind = VALUE_FLAGS[flag]
         converted = convert_flag_value(value, field_kind)

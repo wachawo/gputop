@@ -17,7 +17,6 @@ from gputop import adapters
 from gputop import collector
 from gputop import constants
 from gputop import export
-from gputop import formatting
 from gputop import system
 
 # Parser texts
@@ -132,21 +131,23 @@ def create_session(collector_state: dict, show_system: bool) -> dict:
 
 
 def take_system_reading(session: dict) -> tuple:
-    """One system sample as (sample or None, error text); the sampler is created lazily."""
+    """One system sample as (sample or None, error text); (None, "") when it is switched off."""
     if not session["show_system"]:
         return None, ""
+    return system.take_system_reading(session)
+
+
+def take_record_line(session: dict) -> str | None:
+    """One record: the GPU snapshot, then the system sample, as one compact JSON line.
+
+    A sample the collector failed to take is logged and returned as None, so one bad
+    reading leaves a gap in the recording instead of ending it.
+    """
     try:
-        if session["sampler"] is None:
-            session["sampler"] = system.open_system_sampler()
-        return system.sample_system(session["sampler"]), ""
+        snapshot = collector.sample_collector(session["collector"])
     except Exception as exc:
         logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        return None, formatting.format_error(exc)
-
-
-def take_record_line(session: dict) -> str:
-    """One record: the GPU snapshot, then the system sample, as one compact JSON line."""
-    snapshot = collector.sample_collector(session["collector"])
+        return None
     system_sample, system_error = take_system_reading(session)
     document = export.build_snapshot_dict(
         snapshot, system_sample, system_error, session["show_system"]
@@ -159,7 +160,8 @@ def run_record_loop(
 ) -> int:
     """Write one line per interval without drift; returns the number of lines written.
 
-    `take_sample()` returns one JSON line without the newline, `clock()` is monotonic
+    `take_sample()` returns one JSON line without the newline, or None for a sample that
+    failed and is skipped; `clock()` is monotonic
     seconds, `sleep(seconds)` waits. The first sample is due at once; a sample is taken
     while its deadline lies inside `duration`; a slow sample delays the next one instead
     of causing a burst. Ctrl+C ends the loop quietly.
@@ -173,9 +175,10 @@ def run_record_loop(
             if wait > 0:
                 sleep(wait)
             line = take_sample()
-            stream.write(line + "\n")
-            stream.flush()
-            count += 1
+            if line is not None:
+                stream.write(line + "\n")
+                stream.flush()
+                count += 1
             due = max(due + interval, clock())
     except KeyboardInterrupt:
         pass
@@ -234,9 +237,9 @@ def write_closing_line(count: int, output: str) -> None:
     sys.stderr.write(f"Recorded {count} sample(s) to {output}\n")
 
 
-def check_gpu_range(parser: argparse.ArgumentParser, gpu_index: int) -> list[dict] | None:
+def check_gpu_range(parser: argparse.ArgumentParser, gpu_index: int | None) -> list[dict] | None:
     """Range check of an index above 0; returns the ordered adapter list it enumerated."""
-    if gpu_index <= 0:
+    if gpu_index is None or gpu_index <= 0:
         return None
     ordered_adapters = adapters.list_ordered_adapters()
     try:

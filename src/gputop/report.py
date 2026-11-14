@@ -22,16 +22,13 @@ SYSTEM_TITLE = "System RAM and CPU (OS-reported; not GPU memory)"
 SYSTEM_TOP_TITLE = "Top processes by RAM, whole machine:"
 SYSTEM_FAILED_PREFIX = "System RAM/CPU unavailable: "
 PARENT_SOURCE_LINE = "   server source: parent process (API report, not worker residency)"
-PER_PROCESS_MISSING = "n/a"
-DEVICE_MISSING = "N/A"
 UNKNOWN_MARK = "?"
 
 
 def render_identity_line(snapshot: dict) -> str:
     """Line 1: adapter name, driver, CUDA version and the driver model."""
-    adapter = snapshot["adapter"]
     device = snapshot["device"]
-    parts = [adapter["name"] if adapter is not None else "GPU"]
+    parts = [records.get_device_name(snapshot)]
     if snapshot["driver"]:
         parts.append(f"driver {snapshot['driver']}")
     if snapshot["cuda"]:
@@ -44,7 +41,7 @@ def render_identity_line(snapshot: dict) -> str:
 def render_memory_line(snapshot: dict) -> str:
     """Line 2: device memory in use and in total, plus the shared figure on DRM."""
     used = formatting.format_size_or_na(snapshot["vram_used"])
-    total = DEVICE_MISSING
+    total = formatting.MISSING_SIZE
     if snapshot["vram_total"]:
         total = formatting.format_size(snapshot["vram_total"])
     line = f"VRAM {used} / {total}"
@@ -52,13 +49,6 @@ def render_memory_line(snapshot: dict) -> str:
         shared = formatting.format_size_or_na(snapshot["shared_used"])
         line += f"   shared (in system RAM) {shared}"
     return line
-
-
-def format_megabytes_per_second(kilobytes: int | None) -> str:
-    """A PCIe throughput counter in MB/s without decimals."""
-    if kilobytes is None:
-        return DEVICE_MISSING
-    return format(kilobytes / 1024, ".0f")
 
 
 def format_kind_suffix(kind: str) -> str:
@@ -77,10 +67,10 @@ def render_telemetry_line(device: dict) -> str:
     limit = formatting.format_metric(device["power_limit_w"], ".0f")
     pstate = formatting.format_metric(device["pstate"])
     clock_name, clock_value = records.get_main_clock(device)
-    clock = formatting.format_metric(clock_value)
-    video_clock = formatting.format_metric(device["video_clock"])
-    pcie_rx = format_megabytes_per_second(device["pcie_rx_kbs"])
-    pcie_tx = format_megabytes_per_second(device["pcie_tx_kbs"])
+    clock = formatting.format_metric(clock_value, ".0f")
+    video_clock = formatting.format_metric(device["video_clock"], ".0f")
+    pcie_rx = formatting.format_megabytes_per_second(device["pcie_rx_kbs"])
+    pcie_tx = formatting.format_megabytes_per_second(device["pcie_tx_kbs"])
     fields = [
         f"{records.get_device_label(device)} {util_gpu}",
         f"mem-bandwidth {util_mem}",
@@ -113,7 +103,7 @@ def format_shared_cell(row: dict, is_drm: bool) -> str:
         return ""
     gpu = row["gpu"]
     if constants.COUNTER_SHARED not in gpu["available"]:
-        return DEVICE_MISSING
+        return formatting.MISSING_SIZE
     if gpu["shared"] >= constants.MIB:
         return formatting.format_size(gpu["shared"])
     return ""
@@ -123,7 +113,7 @@ def format_load_cell(gpu: dict) -> str:
     """The GPU% cell: the busiest engine without decimals, or n/a."""
     load = records.get_engine_columns(gpu)["gpu"]
     if load is None:
-        return PER_PROCESS_MISSING
+        return formatting.MISSING_CELL
     return format(load, ".0f")
 
 
@@ -175,6 +165,9 @@ def render_table_notes(snapshot: dict, shown: list[dict]) -> list[str]:
         lines.extend(list_reason_notes(shown))
     if snapshot["process_status"]:
         lines.append(f"DRM process scan: {snapshot['process_status']}.")
+    hidden = len(snapshot["procs"]) - len(shown)
+    if hidden > 0:
+        lines.append(f"{hidden} more process(es) are not shown; --json lists all.")
     return lines
 
 
@@ -210,9 +203,10 @@ def render_file_line(model: dict) -> str:
 def render_model_line(model: dict) -> str:
     """One parsed model of an LLM view."""
     ctx_train = model["ctx_train"] if model["ctx_train"] is not None else UNKNOWN_MARK
+    layers = f"{model['n_layers']} layers, " if model["n_layers"] else ""
     properties = (
         f"{model['arch']}, {model['params_label']} params, {model['quant']}, "
-        f"{model['n_layers']} layers, ctx_train {ctx_train}"
+        f"{layers}ctx_train {ctx_train}"
     )
     return (
         f"   {model['kind_label']}: {model['label']}  [{properties}]  "
@@ -277,9 +271,9 @@ def render_hint_block(row: dict) -> list[str]:
 
 
 def render_detail_blocks(snapshot: dict) -> list[str]:
-    """Detail blocks of every row, in snapshot order."""
+    """Detail blocks of the rows the table shows, in snapshot order."""
     lines = []
-    for row in snapshot["procs"]:
+    for row in snapshot["procs"][:constants.REPORT_MAX_ROWS]:
         if row["llm"] is not None:
             lines.extend(render_llm_block(row))
         else:
@@ -289,7 +283,7 @@ def render_detail_blocks(snapshot: dict) -> list[str]:
 
 def render_system_proc_line(proc: dict) -> str:
     """One row of the system process table."""
-    cpu = PER_PROCESS_MISSING
+    cpu = formatting.MISSING_CELL
     if proc["cpu_pct"] is not None:
         cpu = format(proc["cpu_pct"], ".0f")
     name = proc["name"][:SYSTEM_NAME_WIDTH]

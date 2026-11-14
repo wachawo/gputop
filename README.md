@@ -35,6 +35,14 @@ Inside the project directory this is the same:
 uv run gputop
 ```
 
+Without `uv` and without installing the package, `main.py` runs gputop straight from the
+checkout with any Python 3.11+ that has the dependencies (`textual`, `psutil`,
+`nvidia-ml-py`):
+
+```bash
+python3 main.py
+```
+
 A wide terminal (about 140 columns or more) is recommended for the full process table.
 
 ## Command line

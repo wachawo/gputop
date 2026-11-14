@@ -127,12 +127,7 @@ def refresh_port_table(inspector: dict) -> None:
     inspector["ports_time"] = now
     table = {}
     owners = {}
-    try:
-        listeners, local_listeners = read_listening_ports()
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        listeners = {}
-        local_listeners = {}
+    listeners, local_listeners = read_listening_ports()
     for pid, ports in listeners.items():
         table[pid] = sorted(ports)
         for port in ports:
@@ -171,19 +166,12 @@ def get_detail(inspector: dict, pid: int) -> dict:
     """Return the cached detail of a pid with fresh ports; build or rebuild it when needed."""
     details = inspector["details"]
     detail = details.get(pid)
-    try:
-        if detail is None or is_reused_pid(detail):
-            detail = build_detail(pid)
-            details[pid] = detail
-        refresh_port_table(inspector)
-        detail["ports"] = list(inspector["port_table"].get(pid, []))
-        detail["exclusive_ports"] = list_exclusive_ports(inspector, pid)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        if detail is None:
-            detail = records.create_detail(pid)
-            detail["access_denied"] = True
-            details[pid] = detail
+    if detail is None or is_reused_pid(detail):
+        detail = build_detail(pid)
+        details[pid] = detail
+    refresh_port_table(inspector)
+    detail["ports"] = list(inspector["port_table"].get(pid, []))
+    detail["exclusive_ports"] = list_exclusive_ports(inspector, pid)
     return detail
 
 
@@ -329,20 +317,16 @@ def read_parent_pids(pid: int) -> list[int]:
 def get_parent_targets(inspector: dict, detail: dict) -> list[dict]:
     """Return up to two ancestors as {"pid", "create_time", "exclusive_ports"}, nearest first."""
     targets = []
-    try:
-        if detail["parents"] is None:
-            detail["parents"] = read_parent_pids(detail["pid"])
-        refresh_port_table(inspector)
-        for parent_pid in detail["parents"][:MAX_PARENT_TARGETS]:
-            target = {
-                "pid": parent_pid,
-                "create_time": read_create_time(parent_pid),
-                "exclusive_ports": list_exclusive_ports(inspector, parent_pid),
-            }
-            targets.append(target)
-    except Exception as exc:
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
-        return []
+    if detail["parents"] is None:
+        detail["parents"] = read_parent_pids(detail["pid"])
+    refresh_port_table(inspector)
+    for parent_pid in detail["parents"][:MAX_PARENT_TARGETS]:
+        target = {
+            "pid": parent_pid,
+            "create_time": read_create_time(parent_pid),
+            "exclusive_ports": list_exclusive_ports(inspector, parent_pid),
+        }
+        targets.append(target)
     return targets
 
 
