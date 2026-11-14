@@ -110,7 +110,7 @@ one-second interval.
 | Key | Action |
 |---|---|
 | `q` | Quit. |
-| `s` | Switch to the next sort mode of the process table. |
+| `s` | Sort the process table by the next column. The sorted column is yellow in the header and carries an arrow: `▼` largest first, `▲` A to Z. |
 | `c` | Switch to the next chart mode. |
 | `a` | Toggle between the busiest processes and all processes. |
 | `m` | Toggle between slim monitoring and full diagnostics (display only). |

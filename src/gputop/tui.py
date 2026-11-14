@@ -441,10 +441,15 @@ def render_dashboard(app) -> None:
     render_charts(app)
 
 
-def reset_column_widths(table) -> None:
-    """Size every column to its label again, so the new rows alone decide its width."""
-    for column in table.columns.values():
-        column.content_width = column.label.cell_len
+def reset_columns(table, columns: list[dict], mode: str) -> None:
+    """Relabel every column for the sort mode and size it to its label again.
+
+    The label carries the sort arrow; the width reset lets the new rows alone decide it.
+    """
+    for column in columns:
+        shown = table.columns[column["title"]]
+        shown.label = tui_table.render_column_label(column, mode)
+        shown.content_width = shown.label.cell_len
 
 
 def restore_cursor(table, keys: list[str], selected_key: str | None, offset: tuple) -> None:
@@ -473,7 +478,7 @@ def render_table(app) -> None:
     keys = [records.get_row_key(row) for row in rows]
     offset = (table.scroll_x, table.scroll_y)
     table.clear()
-    reset_column_widths(table)
+    reset_columns(table, view_state["columns"], mode)
     for key, row in zip(keys, rows):
         snapshot = view_state["row_index"][key][1]
         cells = tui_table.render_row_cells(row, snapshot, view_state["columns"])

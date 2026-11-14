@@ -29,9 +29,14 @@ COLUMN_GPU = "GPU"
 SORT_VRAM = "VRAM"
 SORT_GPU_PCT = "GPU%"
 SORT_SHARED = "Shared"
-SORT_NAME = "name"
+SORT_NAME = "Process"
 SORT_RAM = "RAM"
 SORT_CPU = "CPU%"
+# Every sort mode is named after the column it sorts by. The name sort runs A to Z, the
+# others largest first; the header marks the sorted column with the matching arrow.
+SORT_MARK_ASCENDING = "▲"
+SORT_MARK_DESCENDING = "▼"
+SORTED_LABEL_STYLE = "bold yellow"
 
 # Top filter limits
 TOP_MIN_DEDICATED = 32 * constants.MIB
@@ -75,9 +80,13 @@ def list_columns(show_system: bool, has_drm: bool, multi_gpu: bool) -> list[dict
     return columns
 
 
-def render_column_label(column: dict) -> Text:
-    """Header label of a column, aligned like its cells."""
-    return Text(column["title"], justify=column["justify"])
+def render_column_label(column: dict, mode: str = "") -> Text:
+    """Header label of a column, aligned like its cells; the sorted column carries an arrow."""
+    if column["title"] != mode:
+        return Text(column["title"], justify=column["justify"])
+    mark = SORT_MARK_ASCENDING if mode == SORT_NAME else SORT_MARK_DESCENDING
+    label = f"{column['title']}{mark}"
+    return Text(label, style=SORTED_LABEL_STYLE, justify=column["justify"])
 
 
 def list_sort_modes(show_system: bool, has_drm: bool) -> list[str]:
