@@ -451,17 +451,11 @@ def build_status(deferred: int, denied: int, incomplete: int) -> str:
     """Compose the scan status line; "" when the scan saw everything."""
     parts = []
     if deferred:
-        parts.append(
-            f"scan budget reached, {deferred} processes not rescanned this refresh "
-            "(last known GPU fds kept)"
-        )
+        parts.append(f"scan budget reached, {deferred} processes not rescanned")
     if denied:
-        parts.append(
-            f"{denied} processes not inspectable "
-            "(other users' or kernel threads; sudo includes them)"
-        )
+        parts.append(f"{denied} processes not inspectable without sudo")
     if incomplete:
-        parts.append(f"{incomplete} processes whose fds or fdinfo couldn't all be read")
+        parts.append(f"{incomplete} processes partly unreadable")
     return "; ".join(parts)
 
 

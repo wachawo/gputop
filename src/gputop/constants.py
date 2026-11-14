@@ -118,14 +118,8 @@ RESIDENT_NOTE = (
     "Resident: every buffer the process can reach, shared ones included. The same buffer can "
     "appear under several processes, so these are not added up."
 )
-INTEL_MEMORY_NOTE = (
-    "Intel VRAM used is the sum of memory resident in the processes gputop can inspect (the "
-    "driver has no device-wide counter): local memory on a discrete card, system memory on an "
-    "integrated GPU. Buffers shared between processes can be counted twice, and kernel-owned "
-    "memory and processes it can't inspect are missing. The total is the size of the card's "
-    "local-memory PCI window, an estimate that can differ from its memory (0 on an integrated "
-    "GPU, whose total is unknown), so free memory is not shown."
-)
+# The full explanation lives in the README; the interface keeps one line.
+INTEL_MEMORY_NOTE = "Intel VRAM is a sum over inspectable processes; the total is an estimate."
 
 # Placeholders and small vocabularies
 OUTSIDE_NAME = "(outside this container)"

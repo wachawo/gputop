@@ -56,14 +56,12 @@ THROTTLE_FILES = (
 )
 
 # Parts of the Intel metrics explanation line
-STATUS_PMU_DENIED = (
-    "GPU and video load need perf privileges this user lacks (perf_event_paranoid={value})"
-)
-STATUS_PMU_MISSING = "no readable supported i915 performance counters for this GPU"
-STATUS_PMU_SHARED = "performance counters can't attribute load with multiple Intel GPUs"
-STATUS_RAPL_DENIED = "GPU power needs root (RAPL energy is root-only)"
-STATUS_RAPL_MISSING = "no RAPL uncore zone found"
-STATUS_LINE = "Intel device metrics unavailable: {parts}. N/A is unknown, not zero."
+STATUS_PMU_DENIED = "load needs perf access (perf_event_paranoid={value})"
+STATUS_PMU_MISSING = "no i915 performance counters"
+STATUS_PMU_SHARED = "load is not attributable with several Intel GPUs"
+STATUS_RAPL_DENIED = "power needs root"
+STATUS_RAPL_MISSING = "no RAPL uncore zone"
+STATUS_LINE = "Intel metrics unavailable: {parts}."
 
 # Process-wide RAPL latch: zone path once found, failure reason once failed (never retried)
 RAPL_LATCH = {"searched": False, "path": "", "reason": ""}
